@@ -68,6 +68,7 @@ async function main() {
         code: props.statementCode ?? null,
         description: props.description ?? "",
         gradeLevel: parseGradeLevel(props.gradeLevel),
+        jurisdiction: props.jurisdiction || "Multi-State",
       };
       standards[primary] = entry;
       if (node.identifier) standards[node.identifier] = entry;
@@ -131,6 +132,7 @@ async function main() {
             code: std.code,
             description: std.description,
             gradeLevel: std.gradeLevel,
+            jurisdiction: std.jurisdiction || "Multi-State",
           });
         }
       }

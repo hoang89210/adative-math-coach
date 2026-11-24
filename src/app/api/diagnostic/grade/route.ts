@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-
-export const maxDuration = 60;
 import { randomUUID } from "crypto";
+import { computeCoverage } from "@/lib/analytics/coverage";
+import { getComponentsByIds } from "@/lib/data/learning-components";
+import { mergeDiagnosticIntoLearner } from "@/lib/learners";
 import { saveMastery } from "@/lib/mastery";
 import type {
   AnswerSubmission,
@@ -9,6 +10,8 @@ import type {
   DiagnosticQuestion,
   GradeResult,
 } from "@/lib/types/quiz";
+
+export const maxDuration = 60;
 
 function normalizeAnswer(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -19,7 +22,6 @@ function isCorrect(question: DiagnosticQuestion, answer: string) {
   const correct = normalizeAnswer(question.correct_answer);
   if (!a) return false;
   if (a === correct) return true;
-  // allow matching option letter like "A" vs full text
   if (question.options?.length) {
     const idx = question.options.findIndex(
       (opt) => normalizeAnswer(opt) === correct,
@@ -42,12 +44,18 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       grade?: string;
+      jurisdiction?: string;
+      learnerId?: string;
       questions?: DiagnosticQuestion[];
       answers?: AnswerSubmission[];
       components?: Array<{ id: string; description: string }>;
     };
 
     const grade = String(body.grade ?? "").trim();
+    const jurisdiction = body.jurisdiction
+      ? String(body.jurisdiction).trim()
+      : undefined;
+    const learnerId = body.learnerId ? String(body.learnerId).trim() : undefined;
     const questions = body.questions ?? [];
     const answers = body.answers ?? [];
     const components = body.components ?? [];
@@ -108,15 +116,43 @@ export async function POST(request: NextRequest) {
       strongComponents,
     };
 
+    const meta = await getComponentsByIds(
+      grade,
+      byComponent.map((c) => c.componentId),
+    );
+    const coverage = computeCoverage({
+      grade,
+      jurisdiction,
+      result,
+      componentsMeta: meta,
+    });
+
     const sessionId = randomUUID();
     await saveMastery({
       id: sessionId,
       createdAt: new Date().toISOString(),
       grade,
+      jurisdiction,
+      learnerId,
       result,
+      coverage,
     });
 
-    return NextResponse.json({ sessionId, result });
+    if (learnerId) {
+      try {
+        await mergeDiagnosticIntoLearner({
+          learnerId,
+          sessionId,
+          grade,
+          result,
+          coverage,
+        });
+      } catch (err) {
+        console.error("learner merge failed", err);
+      }
+    }
+
+    return NextResponse.json({ sessionId, result, coverage });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

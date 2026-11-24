@@ -17,10 +17,17 @@ import type {
   DifferentiationPackage,
 } from "@/lib/types/skills";
 
+type CoverageSnap = {
+  overallPct: number;
+  domainCoverage?: Array<{ domain: string; pct: number; hit: number; total: number }>;
+  holes?: Array<{ label: string; detail: string }>;
+};
+
 type ResultsPayload = {
   sessionId: string;
   result: GradeResult;
   roadmap: Roadmap;
+  coverage?: CoverageSnap | null;
 };
 
 type ActivePanel =
@@ -110,7 +117,7 @@ export default function ResultsPage() {
     );
   }
 
-  const { result, roadmap, sessionId } = data;
+  const { result, roadmap, sessionId, coverage } = data;
   const shortCode = sessionId.replace(/-/g, "").slice(0, 8).toUpperCase();
   const teacherBase = `/teacher?session=${encodeURIComponent(sessionId)}`;
 
@@ -438,6 +445,47 @@ export default function ResultsPage() {
         </section>
       )}
 
+      {coverage && (
+        <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-6">
+          <h2 className="text-lg font-semibold text-zinc-900">
+            Coverage snapshot
+          </h2>
+          <p className="mt-1 text-sm text-zinc-700">
+            You showed mastery on about{" "}
+            <strong>{coverage.overallPct}%</strong> of the skills sampled in
+            this diagnostic.
+          </p>
+          {coverage.domainCoverage && coverage.domainCoverage.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {coverage.domainCoverage.slice(0, 8).map((d) => (
+                <span
+                  key={d.domain}
+                  className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-zinc-800 border border-emerald-100"
+                >
+                  {d.domain} {d.pct}%
+                </span>
+              ))}
+            </div>
+          )}
+          {coverage.holes && coverage.holes.length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-zinc-700">
+              {coverage.holes.slice(0, 5).map((h) => (
+                <li key={h.label}>
+                  {h.label}{" "}
+                  <span className="text-xs text-zinc-500">({h.detail})</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Link
+            href="/progress"
+            className="mt-3 inline-block text-sm font-medium text-emerald-800 underline"
+          >
+            View long-term progress →
+          </Link>
+        </section>
+      )}
+
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">Skill breakdown</h2>
         <ul className="space-y-3">
@@ -510,6 +558,12 @@ export default function ResultsPage() {
                   </span>
                   {p.masteryLooksLike}
                 </p>
+                {p.dependsOn && p.dependsOn.length > 0 && (
+                  <p className="mt-2 rounded-lg bg-sky-50 px-2 py-1 text-xs text-sky-900">
+                    <span className="font-semibold">Coherence · builds on: </span>
+                    {p.dependsOn.join(" · ")}
+                  </p>
+                )}
                 <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-zinc-700">
                   {p.studyMoves.map((m) => (
                     <li key={m}>{m}</li>

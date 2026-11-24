@@ -44,18 +44,22 @@ function domainLabel(id) {
 
 function main() {
   const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
-  /** grade -> domain -> Map<code, {code, description, ids}> */
-  const byGrade = {};
+  /** grade -> jurisdiction -> domain -> Map<code, std> */
+  const tree = {};
+  const jurisdictionSet = new Set();
 
   for (const [grade, components] of Object.entries(index.byGrade || {})) {
-    if (!byGrade[grade]) byGrade[grade] = {};
+    if (!tree[grade]) tree[grade] = {};
     for (const comp of components) {
       for (const s of comp.relatedStandards || []) {
         const code = s.code;
         if (!code) continue;
+        const jur = s.jurisdiction || "Multi-State";
+        jurisdictionSet.add(jur);
         const domain = domainFromCode(code);
-        if (!byGrade[grade][domain]) byGrade[grade][domain] = new Map();
-        const map = byGrade[grade][domain];
+        if (!tree[grade][jur]) tree[grade][jur] = {};
+        if (!tree[grade][jur][domain]) tree[grade][jur][domain] = new Map();
+        const map = tree[grade][jur][domain];
         const existing = map.get(code);
         if (existing) {
           if (!existing.componentIds.includes(comp.id)) {
@@ -66,6 +70,7 @@ function main() {
             code,
             description: s.description || "",
             standardId: s.id,
+            jurisdiction: jur,
             componentIds: [comp.id],
           });
         }
@@ -74,29 +79,75 @@ function main() {
   }
 
   const grades = {};
-  for (const [grade, domains] of Object.entries(byGrade)) {
-    const domainList = Object.entries(domains)
-      .map(([domainId, map]) => {
-        const standards = [...map.values()].sort((a, b) =>
+  for (const [grade, byJur] of Object.entries(tree)) {
+    const jurisdictions = {};
+    for (const [jur, domains] of Object.entries(byJur)) {
+      const domainList = Object.entries(domains)
+        .map(([domainId, map]) => {
+          const standards = [...map.values()].sort((a, b) =>
+            a.code.localeCompare(b.code, undefined, { numeric: true }),
+          );
+          return {
+            id: domainId,
+            label: domainLabel(domainId),
+            count: standards.length,
+            standards: standards.map((s) => ({
+              code: s.code,
+              description: s.description.slice(0, 240),
+              standardId: s.standardId,
+              jurisdiction: s.jurisdiction,
+              componentCount: s.componentIds.length,
+            })),
+          };
+        })
+        .sort((a, b) => b.count - a.count);
+
+      jurisdictions[jur] = {
+        domains: domainList,
+        standardCount: domainList.reduce((n, d) => n + d.count, 0),
+      };
+    }
+    grades[grade] = { jurisdictions };
+  }
+
+  // Backward-compatible flattened grades (union all jurisdictions)
+  const gradesFlat = {};
+  for (const [grade, payload] of Object.entries(grades)) {
+    const domainMaps = {};
+    for (const jurPayload of Object.values(payload.jurisdictions)) {
+      for (const d of jurPayload.domains) {
+        if (!domainMaps[d.id]) {
+          domainMaps[d.id] = {
+            id: d.id,
+            label: d.label,
+            standards: new Map(),
+          };
+        }
+        for (const s of d.standards) {
+          const key = `${s.jurisdiction}::${s.code}`;
+          if (!domainMaps[d.id].standards.has(key)) {
+            domainMaps[d.id].standards.set(key, s);
+          }
+        }
+      }
+    }
+    const domains = Object.values(domainMaps)
+      .map((d) => {
+        const standards = [...d.standards.values()].sort((a, b) =>
           a.code.localeCompare(b.code, undefined, { numeric: true }),
         );
         return {
-          id: domainId,
-          label: domainLabel(domainId),
+          id: d.id,
+          label: d.label,
           count: standards.length,
-          standards: standards.map((s) => ({
-            code: s.code,
-            description: s.description.slice(0, 240),
-            standardId: s.standardId,
-            componentCount: s.componentIds.length,
-          })),
+          standards,
         };
       })
       .sort((a, b) => b.count - a.count);
-
-    grades[grade] = {
-      domains: domainList,
-      standardCount: domainList.reduce((n, d) => n + d.count, 0),
+    gradesFlat[grade] = {
+      domains,
+      standardCount: domains.reduce((n, d) => n + d.count, 0),
+      jurisdictions: payload.jurisdictions,
     };
   }
 
@@ -117,7 +168,7 @@ function main() {
   ];
 
   const journey = gradeOrder.map((g) => {
-    const entry = grades[g];
+    const entry = gradesFlat[g];
     const topDomains = (entry?.domains || [])
       .filter((d) => d.id !== "Other")
       .slice(0, 6)
@@ -129,17 +180,24 @@ function main() {
     };
   });
 
+  const jurisdictions = [...jurisdictionSet].sort((a, b) => {
+    if (a === "Multi-State") return -1;
+    if (b === "Multi-State") return 1;
+    return a.localeCompare(b);
+  });
+
   const payload = {
     builtAt: new Date().toISOString(),
     domainLabels: DOMAIN_LABELS,
-    grades,
+    jurisdictions,
+    grades: gradesFlat,
     journey,
   };
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(payload));
   console.log(
-    `Wrote ${outPath} grades=${Object.keys(grades).length} journey=${journey.length}`,
+    `Wrote ${outPath} jurisdictions=${jurisdictions.length} grades=${Object.keys(gradesFlat).length}`,
   );
 }
 

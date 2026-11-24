@@ -10,6 +10,7 @@ import {
   resolvePriorityContext,
   resolveSkillLabel,
 } from "@/lib/session-skill";
+import { getMisconceptionsForComponent } from "@/lib/misconceptions";
 import { generateCfuCheck } from "@/lib/skills/cfu";
 
 export async function POST(request: NextRequest) {
@@ -36,21 +37,36 @@ export async function POST(request: NextRequest) {
     if (!body.refresh) {
       const cached = await getCachedCfu(sessionId, componentId);
       if (cached) {
-        return NextResponse.json({ sessionId, componentId, cfu: cached, cached: true });
+        return NextResponse.json({
+          sessionId,
+          componentId,
+          cfu: cached,
+          cached: true,
+        });
       }
     }
 
     const skill = resolveSkillLabel(session, componentId);
     const priority = resolvePriorityContext(session, componentId);
+    const misconceptionHints = getMisconceptionsForComponent(componentId, 6).map(
+      (m) => m.description,
+    );
     const cfu = await generateCfuCheck({
       componentId,
       skill,
       grade: session.grade,
       masteryLooksLike: priority?.masteryLooksLike,
+      misconceptionHints,
     });
 
     await cacheCfu(sessionId, componentId, cfu);
-    return NextResponse.json({ sessionId, componentId, cfu, cached: false });
+    return NextResponse.json({
+      sessionId,
+      componentId,
+      cfu,
+      cached: false,
+      misconceptionCount: misconceptionHints.length,
+    });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

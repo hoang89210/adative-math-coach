@@ -21,6 +21,7 @@ export type RelatedStandard = {
   code: string | null;
   description: string;
   gradeLevel: string[];
+  jurisdiction?: string;
 };
 
 export type LearningComponent = {

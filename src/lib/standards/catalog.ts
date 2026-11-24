@@ -6,6 +6,7 @@ export type CatalogStandard = {
   description: string;
   standardId: string;
   componentCount: number;
+  jurisdiction?: string;
 };
 
 export type CatalogDomain = {
@@ -18,11 +19,16 @@ export type CatalogDomain = {
 export type StandardsCatalog = {
   builtAt: string;
   domainLabels: Record<string, string>;
+  jurisdictions?: string[];
   grades: Record<
     string,
     {
       domains: CatalogDomain[];
       standardCount: number;
+      jurisdictions?: Record<
+        string,
+        { domains: CatalogDomain[]; standardCount: number }
+      >;
     }
   >;
   journey: Array<{
@@ -54,11 +60,35 @@ export function normalizeGradeKey(grade: string): string | null {
   return null;
 }
 
-export function getDomainsForGrade(grade: string) {
+export function listJurisdictions(): string[] {
+  const cat = loadStandardsCatalog();
+  if (cat.jurisdictions?.length) return cat.jurisdictions;
+  return ["Multi-State"];
+}
+
+function domainsFor(gradeKey: string, jurisdiction?: string): CatalogDomain[] {
+  const cat = loadStandardsCatalog();
+  const gradeEntry = cat.grades[gradeKey];
+  if (!gradeEntry) return [];
+
+  const jur = jurisdiction?.trim();
+  if (jur && jur !== "All" && gradeEntry.jurisdictions?.[jur]) {
+    return gradeEntry.jurisdictions[jur].domains;
+  }
+  // Multi-State preferred slice if present, else flat union
+  if (
+    (!jur || jur === "Multi-State") &&
+    gradeEntry.jurisdictions?.["Multi-State"]
+  ) {
+    return gradeEntry.jurisdictions["Multi-State"].domains;
+  }
+  return gradeEntry.domains ?? [];
+}
+
+export function getDomainsForGrade(grade: string, jurisdiction?: string) {
   const key = normalizeGradeKey(grade);
   if (!key) return [];
-  const cat = loadStandardsCatalog();
-  return (cat.grades[key]?.domains ?? []).map((d) => ({
+  return domainsFor(key, jurisdiction).map((d) => ({
     id: d.id,
     label: d.label,
     count: d.count,
@@ -68,17 +98,15 @@ export function getDomainsForGrade(grade: string) {
 export function listStandards(params: {
   grade: string;
   domain?: string;
+  jurisdiction?: string;
   q?: string;
   limit?: number;
 }) {
   const key = normalizeGradeKey(params.grade);
   if (!key) return [];
-  const cat = loadStandardsCatalog();
-  const gradeEntry = cat.grades[key];
-  if (!gradeEntry) return [];
 
   let standards: CatalogStandard[] = [];
-  for (const d of gradeEntry.domains) {
+  for (const d of domainsFor(key, params.jurisdiction)) {
     if (params.domain && d.id !== params.domain) continue;
     standards.push(...d.standards);
   }
@@ -88,7 +116,8 @@ export function listStandards(params: {
     standards = standards.filter(
       (s) =>
         s.code.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q),
+        s.description.toLowerCase().includes(q) ||
+        (s.jurisdiction || "").toLowerCase().includes(q),
     );
   }
 

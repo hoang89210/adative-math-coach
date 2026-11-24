@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-
-export const maxDuration = 60;
 import {
   getLearningComponentsByGrade,
   pickComponentsForDiagnostic,
 } from "@/lib/data/learning-components";
+import { diagnosticBandHint, isHighSchoolGrade } from "@/lib/grades";
 import { callLlmJson, hasLlmKey } from "@/lib/llm";
 import type { DiagnosticQuestion, DiagnosticTest } from "@/lib/types/quiz";
+
+export const maxDuration = 60;
 
 type GrokDiagnosticResponse = {
   questions?: Array<{
@@ -35,13 +36,17 @@ function fallbackQuestions(
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as { grade?: string };
+    const body = (await request.json()) as {
+      grade?: string;
+      jurisdiction?: string;
+    };
     const grade = String(body.grade ?? "").trim();
+    const jurisdiction = String(body.jurisdiction ?? "Multi-State").trim();
     if (!grade) {
       return NextResponse.json({ error: "grade is required" }, { status: 400 });
     }
 
-    const all = await getLearningComponentsByGrade(grade);
+    const all = await getLearningComponentsByGrade(grade, jurisdiction);
     if (all.length < 5) {
       return NextResponse.json(
         {
@@ -66,18 +71,23 @@ export async function POST(request: NextRequest) {
     if (hasLlmKey()) {
       try {
         const grok = await callLlmJson<GrokDiagnosticResponse>({
-          system: `You are an expert elementary/middle school math assessment writer for US Common Core style skills.
+          system: `You are an expert K-12 US math assessment writer (Common Core style and typical state standards).
 Return ONLY valid JSON with shape:
 {"questions":[{"question":"...","type":"multiple_choice"|"short_answer","options":["A","B","C","D"],"correct_answer":"...","target_component_id":"...","explanation":"..."}]}
 Rules:
 - Exactly one question per provided learning component
-- Grade-appropriate language and numbers
+- Match the given grade band: ${diagnosticBandHint(grade)}
+- Grade-appropriate language, numbers, and notation
 - multiple_choice preferred; include 4 options when type is multiple_choice
 - correct_answer must match one option for multiple_choice
 - target_component_id MUST be exactly one of the provided component ids
-- Keep questions concise and solvable without diagrams`,
+- Keep questions concise and solvable without diagrams
+- For high school (9-12): allow algebra/functions/geometry language; still keep each item short
+- Never write below-grade baby talk for secondary grades; never write high-school formalisms for K-2`,
           user: JSON.stringify({
             grade,
+            band_hint: diagnosticBandHint(grade),
+            is_high_school: isHighSchoolGrade(grade),
             learning_components: componentPayload,
           }),
         });
@@ -135,7 +145,7 @@ Rules:
       })),
     };
 
-    return NextResponse.json(test);
+    return NextResponse.json({ ...test, jurisdiction });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

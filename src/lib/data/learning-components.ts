@@ -35,14 +35,36 @@ function normalizeGrade(grade: string): string | null {
   return null;
 }
 
+function matchesJurisdiction(
+  c: LearningComponent,
+  jurisdiction?: string,
+): boolean {
+  const jur = jurisdiction?.trim();
+  if (!jur || jur === "All") return true;
+  if (jur === "Multi-State") {
+    return c.relatedStandards.some(
+      (s) => !s.jurisdiction || s.jurisdiction === "Multi-State",
+    );
+  }
+  return c.relatedStandards.some(
+    (s) => s.jurisdiction === jur || s.jurisdiction === "Multi-State",
+  );
+}
+
 export async function getLearningComponentsByGrade(
   grade: string,
+  jurisdiction?: string,
 ): Promise<LearningComponent[]> {
   const key = normalizeGrade(grade);
   if (!key) return [];
 
   const index = loadIndex();
-  return index.byGrade[key] ?? [];
+  const list = index.byGrade[key] ?? [];
+  if (!jurisdiction?.trim() || jurisdiction === "All") return list;
+
+  const filtered = list.filter((c) => matchesJurisdiction(c, jurisdiction));
+  // fallback if state filter too strict
+  return filtered.length >= 5 ? filtered : list;
 }
 
 export async function getMathIndexStats() {

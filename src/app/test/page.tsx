@@ -60,6 +60,13 @@ export default function TestPage() {
     try {
       const payload = {
         grade: currentTest.grade,
+        jurisdiction:
+          (currentTest as { jurisdiction?: string }).jurisdiction ||
+          undefined,
+        learnerId:
+          (currentTest as { learnerId?: string }).learnerId ||
+          sessionStorage.getItem("learnerId") ||
+          undefined,
         questions: currentTest.questions,
         components: currentTest.components,
         answers: Object.entries(answers).map(([questionId, answer]) => ({
@@ -89,6 +96,7 @@ export default function TestPage() {
           sessionId: data.sessionId,
           result: data.result,
           roadmap: roadData.roadmap,
+          coverage: data.coverage ?? null,
         }),
       );
       router.push("/results");

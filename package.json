@@ -9,7 +9,9 @@
     "lint": "eslint",
     "build:index": "node scripts/build-math-index.mjs",
     "build:progression": "node scripts/build-progression-index.mjs",
-    "build:catalog": "node scripts/build-standards-catalog.mjs"
+    "build:catalog": "node scripts/build-standards-catalog.mjs",
+    "build:misconceptions": "node scripts/build-misconception-index.mjs",
+    "build:all-indexes": "node scripts/build-math-index.mjs && node scripts/build-standards-catalog.mjs && node scripts/build-progression-index.mjs && node scripts/build-misconception-index.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.9.0",

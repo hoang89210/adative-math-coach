@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
     if (hasLlmKey()) {
       try {
         const llm = await callLlmJson<LlmCoachPlan>({
-          system: `You are a math learning coach for US K-8 students and families.
+          system: `You are a math learning coach for US K-12 students and families.
 Write a DIRECTIONAL learning plan — NOT a lesson plan, NOT worksheets, NOT practice item text.
 Return ONLY JSON:
 {
@@ -198,7 +198,7 @@ Return ONLY JSON:
 Rules:
 - Keep the PROVIDED order of componentIds (already sequenced by prerequisites when known)
 - 3 to 6 priorities max
-- Student-friendly language
+- Student-friendly language appropriate to the grade (elementary through high school)
 - No generating practice problems or lesson scripts
 - studyMoves = habits/strategies (worked example, explain aloud, spaced review), not item lists`,
           user: JSON.stringify({

@@ -33,10 +33,20 @@ vercel          # preview
 vercel --prod   # production
 ```
 
+On Windows, if CLI fails with `EPERM symlink`, use **Dashboard import** instead (below) or run terminal **as Administrator** / enable Developer Mode.
+
+### Deploy via Vercel Dashboard (recommended on Windows)
+
+1. Push `web/` to GitHub (new repo)
+2. https://vercel.com/new → **Import** that repo
+3. Framework: Next.js · Root: `.` (if repo is only `web`)
+4. Add env vars before deploy
+5. Deploy
+
 After first deploy:
 
 1. Vercel dashboard → project → **Storage** → create **Blob**
-2. Copy `BLOB_READ_WRITE_TOKEN` into Environment Variables
+2. Copy `BLOB_READ_WRITE_TOKEN` into Environment Variables (Production + Preview)
 3. Redeploy
 
 ## GitHub (optional)

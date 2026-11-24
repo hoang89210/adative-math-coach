@@ -16,8 +16,11 @@ export type MasteryRecord = {
   id: string;
   createdAt: string;
   grade: string;
+  jurisdiction?: string;
+  learnerId?: string;
   result: GradeResult;
   roadmap?: Roadmap;
+  coverage?: unknown;
   artifacts?: SessionArtifacts;
 };
 
