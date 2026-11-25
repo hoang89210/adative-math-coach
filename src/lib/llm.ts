@@ -1,5 +1,13 @@
-import { redactSecretString } from "./log-safe";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { NextResponse } from "next/server";
+import { redactSecretString } from "./log-safe";
+import {
+  isServerTestKeyEnabled,
+  parseAllowServerKeyFallbackFlag,
+  parseAllowServerTestKeyFlag,
+  resolveLlmRequestAccess,
+  selectLlmApiKey,
+} from "./server-test-key";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 
@@ -8,7 +16,7 @@ export type LlmMessage = {
   content: string;
 };
 
-type LlmContext = { apiKey?: string };
+type LlmContext = { apiKey?: string; useServerKey?: boolean };
 
 const llmContext = new AsyncLocalStorage<LlmContext>();
 
@@ -27,27 +35,59 @@ export function getRequestApiKey(request: Request): string | undefined {
   return raw;
 }
 
-/** Run LLM calls with optional per-request user key (from browser). */
+/**
+ * Run LLM calls with the key the server selects:
+ * - header x-use-server-key + ALLOW_SERVER_TEST_KEY: use env OPENAI_API_KEY
+ *   (always rate-limited)
+ * - otherwise: the user's x-openai-api-key, if present
+ * - optional ALLOW_SERVER_KEY_FALLBACK=1 (off by default): same server key,
+ *   also rate-limited, only when the client sent no personal key
+ * A request with no personal key and no authorized server-key path returns
+ * 401 OPENAI_KEY_REQUIRED — the env key is never used as a silent default.
+ */
 export function withLlmRequestKey<T>(
   request: Request,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const apiKey = getRequestApiKey(request);
-  return llmContext.run({ apiKey }, fn);
+  const access = resolveLlmRequestAccess(request, getRequestApiKey(request));
+  if (!access.ok) {
+    const headers: Record<string, string> = {};
+    if (access.retryAfter) {
+      headers["Retry-After"] = String(access.retryAfter);
+    }
+    return Promise.resolve(
+      NextResponse.json(
+        {
+          error: access.error,
+          ...(access.code ? { code: access.code } : {}),
+          ...(access.serverTestKeyEnabled !== undefined
+            ? { serverTestKeyEnabled: access.serverTestKeyEnabled }
+            : {}),
+        },
+        { status: access.status, headers },
+      ) as T,
+    );
+  }
+  if (access.useServerKey) {
+    return llmContext.run({ useServerKey: true }, fn);
+  }
+  return llmContext.run({ apiKey: access.apiKey }, fn);
 }
 
 function resolveApiKey(explicit?: string) {
-  const fromCtx = llmContext.getStore()?.apiKey?.trim();
-  const fromExplicit = explicit?.trim();
-  const fromEnv =
-    process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim();
-  const key = fromExplicit || fromCtx || fromEnv;
-  if (!key) {
-    throw new Error(
-      "No OpenAI API key. Paste your key on the home page, or set OPENAI_API_KEY on the server.",
-    );
+  const ctx = llmContext.getStore();
+  const selected = selectLlmApiKey({
+    useServerKey: Boolean(ctx?.useServerKey),
+    allowServerTestKey: parseAllowServerTestKeyFlag(),
+    allowServerKeyFallback: parseAllowServerKeyFallbackFlag(),
+    serverKey: process.env.OPENAI_API_KEY,
+    userKey: explicit?.trim() || ctx?.apiKey,
+    serverTestKeyEnabled: isServerTestKeyEnabled(),
+  });
+  if (!selected.ok) {
+    throw new Error(selected.error);
   }
-  return key;
+  return selected.key;
 }
 
 function getModel() {
@@ -72,13 +112,13 @@ function getBaseUrl(apiKey: string) {
 }
 
 export function hasLlmKey(explicit?: string) {
-  const fromCtx = llmContext.getStore()?.apiKey?.trim();
-  return Boolean(
-    explicit?.trim() ||
-      fromCtx ||
-      process.env.OPENAI_API_KEY?.trim() ||
-      process.env.XAI_API_KEY?.trim(),
-  );
+  const ctx = llmContext.getStore();
+  // Env OPENAI_API_KEY alone is not enough: the request must have been
+  // authorized to use the server key (button header or fallback flag + limiter).
+  if (ctx?.useServerKey) {
+    return Boolean(process.env.OPENAI_API_KEY?.trim());
+  }
+  return Boolean(explicit?.trim() || ctx?.apiKey?.trim());
 }
 
 export function hasServerOpenAiKey() {

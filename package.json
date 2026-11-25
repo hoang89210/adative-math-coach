@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/*.test.ts src/lib/db/*.test.ts",
+    "test": "tsx --test src/lib/*.test.ts src/lib/db/*.test.ts",
     "build:index": "node scripts/build-math-index.mjs",
     "build:progression": "node scripts/build-progression-index.mjs",
     "build:catalog": "node scripts/build-standards-catalog.mjs",
@@ -31,6 +31,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
     "tailwindcss": "4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

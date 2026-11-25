@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
-import { apiFetch, getStoredOpenAiKey } from "@/lib/client-api-key";
+import { apiErrorMessage, apiFetch, getStoredOpenAiKey, isUsingServerTestKey } from "@/lib/client-api-key";
 import { GRADE_BANDS, GRADES_K12, gradeLabel } from "@/lib/grades";
 
 export default function Home() {
@@ -36,7 +36,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      if (!getStoredOpenAiKey()) {
+      if (!getStoredOpenAiKey() && !isUsingServerTestKey()) {
         const cont = window.confirm(
           "No OpenAI key saved on this device. Continue anyway? (AI questions need a key — paste one in the yellow box above, or the server key if configured.)",
         );
@@ -51,7 +51,7 @@ export default function Home() {
         body: JSON.stringify({ grade, jurisdiction }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to generate test");
+      if (!res.ok) throw new Error(apiErrorMessage(data, "Failed to generate test"));
       sessionStorage.setItem(
         "diagnosticTest",
         JSON.stringify({
@@ -197,7 +197,7 @@ export default function Home() {
                     }),
                   });
                   const j = await res.json();
-                  if (!res.ok) throw new Error(j.error || "Create failed");
+                  if (!res.ok) throw new Error(apiErrorMessage(j, "Create failed"));
                   setLearnerId(j.learnerId);
                   setLearnerCode(j.publicCode);
                   setLearnerMsg(
@@ -234,7 +234,7 @@ export default function Home() {
                     }),
                   });
                   const j = await res.json();
-                  if (!res.ok) throw new Error(j.error || "Login failed");
+                  if (!res.ok) throw new Error(apiErrorMessage(j, "Login failed"));
                   setLearnerId(j.learnerId);
                   setLearnerCode(j.publicCode);
                   setLearnerMsg(`Signed in as ${j.publicCode}`);

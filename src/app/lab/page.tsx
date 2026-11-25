@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { StandardCategoryPicker } from "@/components/StandardCategoryPicker";
-import { apiFetch } from "@/lib/client-api-key";
+import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
 import type {
   GradeLevelResult,
   LabArtifactOption,
@@ -57,7 +57,7 @@ function LabInner() {
         `/api/lab/artifacts?sessionId=${encodeURIComponent(sessionInput.trim())}`,
       );
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load artifacts");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Failed to load artifacts"));
       setArtifacts(json.artifacts ?? []);
       setSessionGrade(json.grade ?? "");
       if (json.grade) setTargetGrade(json.grade);
@@ -126,7 +126,7 @@ function LabInner() {
         body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Evaluation failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Evaluation failed"));
       setMathResult(json.result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -155,7 +155,7 @@ function LabInner() {
         body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Evaluation failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Evaluation failed"));
       setGradeResult(json.result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

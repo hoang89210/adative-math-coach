@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
-import { apiFetch } from "@/lib/client-api-key";
+import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
 import type {
   CoachPriority,
   GradeResult,
@@ -144,7 +144,7 @@ export default function ResultsPage() {
         `/api/journey?sessionId=${encodeURIComponent(sessionId)}&grade=${encodeURIComponent(result.grade)}`,
       );
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Journey failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Journey failed"));
       setJourney(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -194,7 +194,7 @@ export default function ResultsPage() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Quiz generation failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Quiz generation failed"));
       setPanel({
         kind: "quiz",
         componentId: p.componentId,
@@ -220,7 +220,7 @@ export default function ResultsPage() {
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Study sheet failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Study sheet failed"));
       setPanel({
         kind: "sheet",
         componentId: p.componentId,
@@ -246,7 +246,7 @@ export default function ResultsPage() {
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "CFU generation failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "CFU generation failed"));
       setPanel({
         kind: "cfu",
         componentId: p.componentId,
@@ -276,7 +276,7 @@ export default function ResultsPage() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Interpret failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Interpret failed"));
       setCfuInterp(json.interpretations);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -297,7 +297,7 @@ export default function ResultsPage() {
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Differentiation failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Differentiation failed"));
       setPanel({
         kind: "diff",
         componentId: p.componentId,

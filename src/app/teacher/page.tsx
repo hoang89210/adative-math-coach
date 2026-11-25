@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo, useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { StandardCategoryPicker } from "@/components/StandardCategoryPicker";
-import { apiFetch } from "@/lib/client-api-key";
+import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
 import type { TeacherLesson, TeacherPrepState } from "@/lib/types/skills";
 
 type SkillRow = {
@@ -124,7 +124,7 @@ function TeacherPageInner() {
         `/api/teacher/session?sessionId=${encodeURIComponent(raw.trim())}`,
       );
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Session not found");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Session not found"));
       setSession(json as SessionView);
       setCodeInput(json.shortCode || raw);
       const preferred =
@@ -157,7 +157,7 @@ function TeacherPageInner() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Lesson failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Lesson failed"));
       setLesson(json.lesson);
       await loadSession(session.sessionId);
     } catch (err) {
@@ -182,7 +182,7 @@ function TeacherPageInner() {
           }),
         });
         const lj = await lr.json();
-        if (!lr.ok) throw new Error(lj.error || "Need lesson first");
+        if (!lr.ok) throw new Error(apiErrorMessage(lj, "Need lesson first"));
         setLesson(lj.lesson);
       }
       const res = await apiFetch("/api/teacher/prep", {
@@ -195,7 +195,7 @@ function TeacherPageInner() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Prep failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Prep failed"));
       setPrep(json.prep);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -220,7 +220,7 @@ function TeacherPageInner() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Prep turn failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Prep turn failed"));
       setPrep(json.prep);
       setPrepMessage("");
     } catch (err) {
@@ -244,7 +244,7 @@ function TeacherPageInner() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Finalize failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Finalize failed"));
       setPrep(json.prep);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -265,7 +265,7 @@ function TeacherPageInner() {
       if (generateIfMissing) q.set("generate", "1");
       const res = await apiFetch(`/api/teacher/cfu-guide?${q}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "CFU guide failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "CFU guide failed"));
       setCfuGuide(json.guide);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -285,7 +285,7 @@ function TeacherPageInner() {
       });
       const res = await fetch(`/api/teacher/diff-plan?${q}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Diff plan failed");
+      if (!res.ok) throw new Error(apiErrorMessage(json, "Diff plan failed"));
       setDiffPlan(json.plan);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { apiFetch } from "@/lib/client-api-key";
+import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
 import type { DiagnosticTest } from "@/lib/types/quiz";
 
 function readTest(): DiagnosticTest | null {
@@ -81,7 +81,7 @@ export default function TestPage() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Grading failed");
+      if (!res.ok) throw new Error(apiErrorMessage(data, "Grading failed"));
 
       const roadRes = await apiFetch("/api/roadmap", {
         method: "POST",
@@ -89,7 +89,7 @@ export default function TestPage() {
         body: JSON.stringify({ sessionId: data.sessionId }),
       });
       const roadData = await roadRes.json();
-      if (!roadRes.ok) throw new Error(roadData.error || "Roadmap failed");
+      if (!roadRes.ok) throw new Error(apiErrorMessage(roadData, "Roadmap failed"));
 
       sessionStorage.setItem(
         "resultsPayload",

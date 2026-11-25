@@ -53,6 +53,40 @@ function markDbUnavailable() {
   dbUnavailableUntil = Date.now() + getDbFailBackoffMs();
 }
 
+/**
+ * Seconds for a 503 Retry-After header when the DB fail-fast path trips.
+ * Uses ceil(remaining backoff) when a cooldown is active; otherwise the
+ * full DB_FAIL_BACKOFF_MS window (when remaining-time info is missing).
+ */
+export function computeDbFailRetryAfterSec(
+  now: number,
+  unavailableUntil: number,
+  backoffMs: number,
+): number {
+  const remaining = unavailableUntil - now;
+  if (remaining > 0) return Math.max(1, Math.ceil(remaining / 1000));
+  return Math.max(1, Math.ceil(backoffMs / 1000));
+}
+
+export function getDbFailRetryAfterSec(now: number = Date.now()): number {
+  return computeDbFailRetryAfterSec(
+    now,
+    dbUnavailableUntil,
+    getDbFailBackoffMs(),
+  );
+}
+
+/** Build the 503 + Retry-After init used by routes on the DB fail-fast path. */
+export function dbFailFastResponseInit(now: number = Date.now()): {
+  status: 503;
+  headers: { "Retry-After": string };
+} {
+  return {
+    status: 503,
+    headers: { "Retry-After": String(getDbFailRetryAfterSec(now)) },
+  };
+}
+
 /** Record a timeout seen outside dbQuery (e.g. a Promise.race cap). */
 export function noteDbTimeout(err: unknown) {
   if (isDbTimeoutError(err)) markDbUnavailable();
@@ -62,6 +96,11 @@ function assertDbAvailable() {
   if (Date.now() < dbUnavailableUntil) {
     throw new Error("database temporarily unavailable");
   }
+}
+
+/** Test-only: set or clear the fail-fast cooldown clock. */
+export function setDbUnavailableUntilForTests(ts: number) {
+  dbUnavailableUntil = ts;
 }
 
 export function getDatabaseUrl(): string | null {

@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   clearStoredOpenAiKey,
   getStoredOpenAiKey,
+  isUsingServerTestKey,
   looksLikeOpenAiKey,
   setStoredOpenAiKey,
+  setUsingServerTestKey,
 } from "@/lib/client-api-key";
 
 type Props = {
@@ -18,6 +20,33 @@ export function ApiKeyPanel({ className = "", compact = false }: Props) {
   const [saved, setSaved] = useState(() => Boolean(getStoredOpenAiKey()));
   const [show, setShow] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [serverMode, setServerMode] = useState(() => isUsingServerTestKey());
+  const [serverKeyAvailable, setServerKeyAvailable] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((data: { serverTestKeyEnabled?: boolean }) => {
+        setServerKeyAvailable(Boolean(data.serverTestKeyEnabled));
+        if (!data.serverTestKeyEnabled && isUsingServerTestKey()) {
+          setUsingServerTestKey(false);
+          setServerMode(false);
+        }
+      })
+      .catch(() => setServerKeyAvailable(false));
+  }, []);
+
+  function useServerKey() {
+    setUsingServerTestKey(true);
+    setServerMode(true);
+    setMsg("Using the server test key for this browser. Switch back anytime.");
+  }
+
+  function useOwnKey() {
+    setUsingServerTestKey(false);
+    setServerMode(false);
+    setMsg("Switched back to your own key (if saved on this device).");
+  }
 
   function save() {
     const k = value.trim();
@@ -27,6 +56,8 @@ export function ApiKeyPanel({ className = "", compact = false }: Props) {
     }
     setStoredOpenAiKey(k);
     setSaved(true);
+    setUsingServerTestKey(false);
+    setServerMode(false);
     setMsg("Saved on this device only. Not uploaded to our database.");
   }
 
@@ -37,13 +68,57 @@ export function ApiKeyPanel({ className = "", compact = false }: Props) {
     setMsg("Key cleared from this browser.");
   }
 
+  const serverToggle = serverKeyAvailable ? (
+    serverMode ? (
+      <button
+        type="button"
+        onClick={useOwnKey}
+        className={
+          compact
+            ? "rounded-lg border border-teal-300 bg-white px-2 py-1 font-semibold text-teal-950"
+            : "rounded-xl border border-teal-300 bg-white px-4 py-2 text-xs font-semibold text-teal-950"
+        }
+      >
+        Dùng key của tôi
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={useServerKey}
+        className={
+          compact
+            ? "rounded-lg border border-teal-600 bg-teal-700 px-2 py-1 font-semibold text-white"
+            : "rounded-xl bg-teal-700 px-4 py-2 text-xs font-semibold text-white"
+        }
+      >
+        Không có key
+      </button>
+    )
+  ) : null;
+
+  const serverLabel = serverMode ? (
+    <p
+      className={
+        compact
+          ? "text-[11px] font-medium text-teal-800"
+          : "mt-2 text-xs font-medium text-teal-800"
+      }
+    >
+      đang dùng key test của server
+    </p>
+  ) : null;
+
   if (compact) {
     return (
       <div
         className={`flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs ${className}`}
       >
         <span className="font-semibold text-amber-950">
-          {saved ? "OpenAI key on device" : "No OpenAI key on device"}
+          {serverMode
+            ? "Using server test key"
+            : saved
+              ? "OpenAI key on device"
+              : "No OpenAI key on device"}
         </span>
         <input
           type={show ? "text" : "password"}
@@ -73,6 +148,8 @@ export function ApiKeyPanel({ className = "", compact = false }: Props) {
         >
           Clear
         </button>
+        {serverToggle}
+        {serverLabel}
       </div>
     );
   }
@@ -128,11 +205,17 @@ export function ApiKeyPanel({ className = "", compact = false }: Props) {
         >
           Clear
         </button>
+        {serverToggle}
       </div>
+      {serverLabel}
       <p className="mt-2 text-xs text-amber-950">
         Status:{" "}
         <strong>
-          {saved ? "Key saved on this device" : "No key on this device"}
+          {serverMode
+            ? "đang dùng key test của server"
+            : saved
+              ? "Key saved on this device"
+              : "No key on this device"}
         </strong>
       </p>
       {msg && <p className="mt-1 text-xs text-zinc-600">{msg}</p>}

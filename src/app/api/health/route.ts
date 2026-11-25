@@ -5,6 +5,10 @@ import { dbEnabled, getDatabaseUrl, sessionStoreKind } from "@/lib/db/client";
 import { NODES_PATH, RELATIONSHIPS_PATH } from "@/lib/data/paths";
 import { readJsonlFirstLine } from "@/lib/data/read-jsonl";
 import { sanitizeDbError } from "@/lib/sanitize-error";
+import {
+  isServerKeyFallbackEnabled,
+  isServerTestKeyEnabled,
+} from "@/lib/server-test-key";
 
 /**
  * GET /api/health response shape:
@@ -17,7 +21,14 @@ import { sanitizeDbError } from "@/lib/sanitize-error";
  *                         // false = DB configured but the check failed;
  *                         // null = no DATABASE_URL / POSTGRES_* configured
  *   dbError?: string,     // only when okDb === false; sanitized (no URI / password / token)
- *   env: { dbOk, hasDatabaseUrl, sessionStore, ... },  // dbOk mirrors okDb
+ *   serverTestKeyEnabled: boolean, // “Không có key” button: ALLOW_SERVER_TEST_KEY=1 and a server key exist
+ *   serverKeyFallbackEnabled: boolean, // server key usable WITHOUT x-use-server-key
+ *                                      // (only when ALLOW_SERVER_KEY_FALLBACK=1 and a server key exist)
+ *   env: {
+ *     hasOpenAiKey,       // server has OPENAI_API_KEY configured (not “usable without a header”)
+ *     acceptsUserApiKey,  // clients may send x-openai-api-key
+ *     serverTestKeyEnabled, serverKeyFallbackEnabled, dbOk, ...
+ *   },
  *   data: { mathIndexExists, nodesExists, readError, ... }
  * }
  *
@@ -28,8 +39,8 @@ import { sanitizeDbError } from "@/lib/sanitize-error";
  * If okDb === false, `ok` is false (sessions cannot be saved to Postgres).
  */
 export async function GET() {
-  // Health must run at request time so okDb / dbError reflect the live DB,
-  // not a value frozen during `next build`.
+  // Health must run at request time so okDb / dbError / serverTestKeyEnabled
+  // reflect live env and DB, not a value frozen during `next build`.
   await connection();
 
   const nodesExists = fs.existsSync(NODES_PATH);
@@ -79,10 +90,14 @@ export async function GET() {
     okContent,
     okDb,
     ...(dbError ? { dbError } : {}),
+    serverTestKeyEnabled: isServerTestKeyEnabled(),
+    serverKeyFallbackEnabled: isServerKeyFallbackEnabled(),
     env: {
       hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
       hasXaiKey: Boolean(process.env.XAI_API_KEY?.trim()),
       acceptsUserApiKey: true,
+      serverTestKeyEnabled: isServerTestKeyEnabled(),
+      serverKeyFallbackEnabled: isServerKeyFallbackEnabled(),
       hasDatabaseUrl: Boolean(getDatabaseUrl()),
       hasBlobToken: Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim()),
       sessionStore: store,
