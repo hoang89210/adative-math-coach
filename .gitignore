@@ -47,5 +47,14 @@ next-env.d.ts
 
 .vercel
 
-# supabase CLI local state
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# supabase CLI local cache (may contain project metadata)
 supabase/.temp/
+
+# local E2E run artifacts (session ids; do not commit)
+/e2e-artifacts/
