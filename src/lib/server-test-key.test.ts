@@ -4,9 +4,13 @@ import { redactSecretString } from "./log-safe";
 import { getClientIp } from "./pin-rate-limit-core";
 import {
   MemoryWindowLimiter,
+  OPENAI_KEY_REQUIRED,
   checkServerTestKeyAccess,
+  isServerKeyFallbackEnabled,
   isServerTestKeyEnabled,
+  parseAllowServerKeyFallbackFlag,
   parseAllowServerTestKeyFlag,
+  resolveLlmRequestAccess,
   selectLlmApiKey,
   wantsServerTestKey,
 } from "./server-test-key";
@@ -17,6 +21,7 @@ const USER_KEY = "sk-test-USER-key-abcdefghijklmnopqrstuvwxyz";
 afterEach(() => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.ALLOW_SERVER_TEST_KEY;
+  delete process.env.ALLOW_SERVER_KEY_FALLBACK;
 });
 
 function req(headers: Record<string, string> = {}) {
@@ -114,16 +119,32 @@ describe("selectLlmApiKey", () => {
     }
   });
 
-  test("falls back to env key when no user key is provided", () => {
+  test("does not silently use the env key when fallback is off (default)", () => {
     const result = selectLlmApiKey({
       useServerKey: false,
       allowServerTestKey: false,
+      allowServerKeyFallback: false,
       serverKey: SERVER_KEY,
-      envKey: SERVER_KEY,
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.status, 401);
+      assert.equal(result.code, OPENAI_KEY_REQUIRED);
+      assert.equal("key" in result, false);
+    }
+  });
+
+  test("uses the server key as fallback only when that flag is on", () => {
+    const result = selectLlmApiKey({
+      useServerKey: false,
+      allowServerTestKey: false,
+      allowServerKeyFallback: true,
+      serverKey: SERVER_KEY,
     });
     assert.equal(result.ok, true);
     if (result.ok) {
-      assert.equal(result.source, "env");
+      assert.equal(result.source, "fallback");
+      assert.equal(result.key, SERVER_KEY);
     }
   });
 
@@ -133,6 +154,150 @@ describe("selectLlmApiKey", () => {
       allowServerTestKey: false,
     });
     assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.status, 401);
+      assert.equal(result.code, OPENAI_KEY_REQUIRED);
+    }
+  });
+});
+
+describe("ALLOW_SERVER_KEY_FALLBACK flag", () => {
+  test("is off by default", () => {
+    assert.equal(parseAllowServerKeyFallbackFlag(undefined), false);
+    assert.equal(parseAllowServerKeyFallbackFlag(""), false);
+    assert.equal(parseAllowServerKeyFallbackFlag("0"), false);
+    assert.equal(isServerKeyFallbackEnabled(false, true), false);
+    assert.equal(isServerKeyFallbackEnabled(true, false), false);
+    assert.equal(isServerKeyFallbackEnabled(true, true), true);
+  });
+});
+
+describe("resolveLlmRequestAccess", () => {
+  test("no header + no user key returns OPENAI_KEY_REQUIRED even if the server has a key", () => {
+    process.env.OPENAI_API_KEY = SERVER_KEY;
+    const limiter = new MemoryWindowLimiter(() => 5, () => 60_000);
+    const result = resolveLlmRequestAccess(req(), undefined, {
+      testKeyEnabled: false,
+      fallbackEnabled: false,
+      limiter,
+      ip: "203.0.113.40",
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.status, 401);
+      assert.equal(result.code, OPENAI_KEY_REQUIRED);
+    }
+    // not counted: a later authorized call still has full budget
+    const later = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: true,
+      fallbackEnabled: false,
+      limiter,
+      ip: "203.0.113.40",
+    });
+    assert.equal(later.ok, true);
+  });
+
+  test("header + flag off returns 403 and is not counted", () => {
+    const limiter = new MemoryWindowLimiter(() => 1, () => 60_000);
+    const denied = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: false,
+      fallbackEnabled: false,
+      limiter,
+      ip: "203.0.113.41",
+    });
+    assert.equal(denied.ok, false);
+    if (!denied.ok) {
+      assert.equal(denied.status, 403);
+    }
+    const allowed = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: true,
+      fallbackEnabled: false,
+      limiter,
+      ip: "203.0.113.41",
+    });
+    assert.equal(allowed.ok, true);
+    if (allowed.ok) assert.equal(allowed.useServerKey, true);
+  });
+
+  test("header + flag on uses the server key and counts against the limiter", () => {
+    const limiter = new MemoryWindowLimiter(() => 1, () => 60_000);
+    const first = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: true,
+      limiter,
+      ip: "203.0.113.42",
+    });
+    assert.equal(first.ok, true);
+    if (first.ok) assert.equal(first.useServerKey, true);
+
+    const second = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: true,
+      limiter,
+      ip: "203.0.113.42",
+    });
+    assert.equal(second.ok, false);
+    if (!second.ok) {
+      assert.equal(second.status, 429);
+      assert.ok((second.retryAfter ?? 0) >= 1);
+    }
+  });
+
+  test("fallback flag off by default does not use the server key without the header", () => {
+    assert.equal(parseAllowServerKeyFallbackFlag(undefined), false);
+    const limiter = new MemoryWindowLimiter(() => 5, () => 60_000);
+    const result = resolveLlmRequestAccess(req(), undefined, {
+      testKeyEnabled: true,
+      fallbackEnabled: false,
+      limiter,
+      ip: "203.0.113.43",
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.status, 401);
+      assert.equal(result.code, OPENAI_KEY_REQUIRED);
+      assert.equal(result.serverTestKeyEnabled, true);
+    }
+  });
+
+  test("fallback flag on uses the server key without the header and counts the call", () => {
+    const limiter = new MemoryWindowLimiter(() => 1, () => 60_000);
+    const first = resolveLlmRequestAccess(req(), undefined, {
+      testKeyEnabled: false,
+      fallbackEnabled: true,
+      limiter,
+      ip: "203.0.113.44",
+    });
+    assert.equal(first.ok, true);
+    if (first.ok) assert.equal(first.useServerKey, true);
+
+    const second = resolveLlmRequestAccess(req(), undefined, {
+      fallbackEnabled: true,
+      limiter,
+      ip: "203.0.113.44",
+    });
+    assert.equal(second.ok, false);
+    if (!second.ok) assert.equal(second.status, 429);
+  });
+
+  test("a personal key is used and is not rate-limited as a server-key call", () => {
+    const limiter = new MemoryWindowLimiter(() => 1, () => 60_000);
+    const result = resolveLlmRequestAccess(req(), USER_KEY, {
+      testKeyEnabled: true,
+      fallbackEnabled: true,
+      limiter,
+      ip: "203.0.113.45",
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.useServerKey, false);
+      assert.equal(result.apiKey, USER_KEY);
+    }
+    // server-key budget still unused
+    const serverCall = resolveLlmRequestAccess(req({ "x-use-server-key": "1" }), undefined, {
+      testKeyEnabled: true,
+      limiter,
+      ip: "203.0.113.45",
+    });
+    assert.equal(serverCall.ok, true);
   });
 });
 

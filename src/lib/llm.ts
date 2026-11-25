@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { NextResponse } from "next/server";
 import { redactSecretString } from "./log-safe";
 import {
-  checkServerTestKeyAccess,
   isServerTestKeyEnabled,
+  parseAllowServerKeyFallbackFlag,
   parseAllowServerTestKeyFlag,
+  resolveLlmRequestAccess,
   selectLlmApiKey,
-  wantsServerTestKey,
 } from "./server-test-key";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -37,32 +37,41 @@ export function getRequestApiKey(request: Request): string | undefined {
 
 /**
  * Run LLM calls with the key the server selects:
- * - header x-use-server-key: use env OPENAI_API_KEY only if ALLOW_SERVER_TEST_KEY
- *   is on (rate-limited, rejected otherwise)
- * - otherwise: optional per-request user key, then env fallback
+ * - header x-use-server-key + ALLOW_SERVER_TEST_KEY: use env OPENAI_API_KEY
+ *   (always rate-limited)
+ * - otherwise: the user's x-openai-api-key, if present
+ * - optional ALLOW_SERVER_KEY_FALLBACK=1 (off by default): same server key,
+ *   also rate-limited, only when the client sent no personal key
+ * A request with no personal key and no authorized server-key path returns
+ * 401 OPENAI_KEY_REQUIRED — the env key is never used as a silent default.
  */
 export function withLlmRequestKey<T>(
   request: Request,
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (wantsServerTestKey(request)) {
-    const access = checkServerTestKeyAccess(request);
-    if (!access.ok) {
-      const headers: Record<string, string> = {};
-      if (access.retryAfter) {
-        headers["Retry-After"] = String(access.retryAfter);
-      }
-      return Promise.resolve(
-        NextResponse.json({ error: access.error }, {
-          status: access.status,
-          headers,
-        }) as T,
-      );
+  const access = resolveLlmRequestAccess(request, getRequestApiKey(request));
+  if (!access.ok) {
+    const headers: Record<string, string> = {};
+    if (access.retryAfter) {
+      headers["Retry-After"] = String(access.retryAfter);
     }
+    return Promise.resolve(
+      NextResponse.json(
+        {
+          error: access.error,
+          ...(access.code ? { code: access.code } : {}),
+          ...(access.serverTestKeyEnabled !== undefined
+            ? { serverTestKeyEnabled: access.serverTestKeyEnabled }
+            : {}),
+        },
+        { status: access.status, headers },
+      ) as T,
+    );
+  }
+  if (access.useServerKey) {
     return llmContext.run({ useServerKey: true }, fn);
   }
-  const apiKey = getRequestApiKey(request);
-  return llmContext.run({ apiKey }, fn);
+  return llmContext.run({ apiKey: access.apiKey }, fn);
 }
 
 function resolveApiKey(explicit?: string) {
@@ -70,10 +79,10 @@ function resolveApiKey(explicit?: string) {
   const selected = selectLlmApiKey({
     useServerKey: Boolean(ctx?.useServerKey),
     allowServerTestKey: parseAllowServerTestKeyFlag(),
+    allowServerKeyFallback: parseAllowServerKeyFallbackFlag(),
     serverKey: process.env.OPENAI_API_KEY,
     userKey: explicit?.trim() || ctx?.apiKey,
-    envKey:
-      process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim(),
+    serverTestKeyEnabled: isServerTestKeyEnabled(),
   });
   if (!selected.ok) {
     throw new Error(selected.error);
@@ -104,16 +113,12 @@ function getBaseUrl(apiKey: string) {
 
 export function hasLlmKey(explicit?: string) {
   const ctx = llmContext.getStore();
+  // Env OPENAI_API_KEY alone is not enough: the request must have been
+  // authorized to use the server key (button header or fallback flag + limiter).
   if (ctx?.useServerKey) {
-    return isServerTestKeyEnabled();
+    return Boolean(process.env.OPENAI_API_KEY?.trim());
   }
-  const fromCtx = ctx?.apiKey?.trim();
-  return Boolean(
-    explicit?.trim() ||
-      fromCtx ||
-      process.env.OPENAI_API_KEY?.trim() ||
-      process.env.XAI_API_KEY?.trim(),
-  );
+  return Boolean(explicit?.trim() || ctx?.apiKey?.trim());
 }
 
 export function hasServerOpenAiKey() {

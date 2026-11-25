@@ -61,3 +61,27 @@ export async function apiFetch(
   }
   return fetch(input, { ...init, headers });
 }
+
+export const OPENAI_KEY_REQUIRED = "OPENAI_KEY_REQUIRED";
+
+/** Turn an API JSON body into a user-facing error, with a key-panel hint when needed. */
+export function apiErrorMessage(data: unknown, fallback: string): string {
+  const body =
+    data && typeof data === "object"
+      ? (data as {
+          error?: unknown;
+          code?: unknown;
+          serverTestKeyEnabled?: unknown;
+        })
+      : {};
+  if (body.code === OPENAI_KEY_REQUIRED) {
+    if (body.serverTestKeyEnabled) {
+      return "OpenAI API key required. Paste your key in the yellow panel, or click “Không có key” to use the server test key.";
+    }
+    return (
+      (typeof body.error === "string" && body.error) ||
+      "OpenAI API key required. Paste your key in the yellow panel."
+    );
+  }
+  return (typeof body.error === "string" && body.error) || fallback;
+}

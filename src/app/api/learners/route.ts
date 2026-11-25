@@ -5,7 +5,7 @@ import {
   publicLearnerView,
   verifyLearnerPin,
 } from "@/lib/learners";
-import { isDbTimeoutError } from "@/lib/db/client";
+import { dbFailFastResponseInit, isDbTimeoutError } from "@/lib/db/client";
 import { sanitizeDbError } from "@/lib/sanitize-error";
 import {
   checkPinLoginLimits,
@@ -90,10 +90,15 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
-    const status = isDbTimeoutError(err) ? 503 : 500;
+    if (isDbTimeoutError(err)) {
+      return NextResponse.json(
+        { error: sanitizeDbError(err) || "Request failed" },
+        dbFailFastResponseInit(),
+      );
+    }
     return NextResponse.json(
       { error: sanitizeDbError(err) || "Request failed" },
-      { status },
+      { status: 500 },
     );
   }
 }

@@ -3,14 +3,28 @@ import { getClientIp } from "./pin-rate-limit-core";
 /** Client header that requests server-key (test) mode. Server still decides. */
 export const SERVER_TEST_KEY_HEADER = "x-use-server-key";
 
+/** Returned when a request has no user key and is not authorized to use the server key. */
+export const OPENAI_KEY_REQUIRED = "OPENAI_KEY_REQUIRED";
+
 const DEFAULT_MAX_CALLS = 20;
 const DEFAULT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+export function parseTruthyEnvFlag(value: string | undefined): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
 
 export function parseAllowServerTestKeyFlag(
   value: string | undefined = process.env.ALLOW_SERVER_TEST_KEY,
 ): boolean {
-  const v = (value ?? "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+  return parseTruthyEnvFlag(value);
+}
+
+/** Silent env-key fallback (no x-use-server-key header). Off by default. */
+export function parseAllowServerKeyFallbackFlag(
+  value: string | undefined = process.env.ALLOW_SERVER_KEY_FALLBACK,
+): boolean {
+  return parseTruthyEnvFlag(value);
 }
 
 export function getServerTestKeyMaxCalls(
@@ -35,6 +49,32 @@ export function isServerTestKeyEnabled(
   return flag && hasServerKey;
 }
 
+/** True only when ALLOW_SERVER_KEY_FALLBACK is on AND the server has OPENAI_API_KEY. */
+export function isServerKeyFallbackEnabled(
+  flag: boolean = parseAllowServerKeyFallbackFlag(),
+  hasServerKey: boolean = Boolean(process.env.OPENAI_API_KEY?.trim()),
+): boolean {
+  return flag && hasServerKey;
+}
+
+export function missingOpenAiKeyError(serverTestKeyEnabled: boolean): {
+  ok: false;
+  status: 401;
+  code: typeof OPENAI_KEY_REQUIRED;
+  error: string;
+  serverTestKeyEnabled: boolean;
+} {
+  return {
+    ok: false,
+    status: 401,
+    code: OPENAI_KEY_REQUIRED,
+    error: serverTestKeyEnabled
+      ? "OpenAI API key required. Paste your key in the yellow panel, or click “Không có key” to use the server test key."
+      : "OpenAI API key required. Paste your key in the yellow panel.",
+    serverTestKeyEnabled,
+  };
+}
+
 export function wantsServerTestKey(request: Request): boolean {
   const raw =
     request.headers.get(SERVER_TEST_KEY_HEADER)?.trim() ||
@@ -47,52 +87,66 @@ export function wantsServerTestKey(request: Request): boolean {
 export type KeySelectInput = {
   useServerKey: boolean;
   allowServerTestKey: boolean;
+  allowServerKeyFallback?: boolean;
   serverKey?: string;
   userKey?: string;
-  envKey?: string;
+  serverTestKeyEnabled?: boolean;
 };
 
 export type KeySelectOk = {
   ok: true;
-  source: "server" | "user" | "env";
+  source: "server" | "user" | "fallback";
   key: string;
 };
 
 export type KeySelectErr = {
   ok: false;
-  status: 403;
+  status: 401 | 403;
   error: string;
+  code?: string;
+  serverTestKeyEnabled?: boolean;
 };
 
 export type KeySelectResult = KeySelectOk | KeySelectErr;
-
-const NO_KEY_MESSAGE =
-  "No OpenAI API key. Paste your key on the home page, or set OPENAI_API_KEY on the server.";
 
 const SERVER_KEY_DISABLED_MESSAGE =
   "Server test key is not enabled. Paste your own OpenAI API key, or ask an admin to set ALLOW_SERVER_TEST_KEY=1 with OPENAI_API_KEY.";
 
 /**
- * Pick which API key to use. When useServerKey is requested, the server key is
- * used only if the flag is on and a server key exists — otherwise the request
- * is rejected (do not fall back to a user key, and never return the key).
+ * Pick which API key to use.
+ * The server key is used only when useServerKey is set (button header already
+ * authorized, or the optional fallback flag authorized). It is never used as a
+ * silent default when the client sends no key.
  */
 export function selectLlmApiKey(input: KeySelectInput): KeySelectResult {
   if (input.useServerKey) {
     const serverKey = input.serverKey?.trim() ?? "";
-    if (!input.allowServerTestKey || !serverKey) {
+    if (!serverKey || !(input.allowServerTestKey || input.allowServerKeyFallback)) {
       return { ok: false, status: 403, error: SERVER_KEY_DISABLED_MESSAGE };
     }
-    return { ok: true, source: "server", key: serverKey };
+    return {
+      ok: true,
+      source: input.allowServerTestKey ? "server" : "fallback",
+      key: serverKey,
+    };
   }
 
   const userKey = input.userKey?.trim();
   if (userKey) return { ok: true, source: "user", key: userKey };
 
-  const envKey = input.envKey?.trim();
-  if (envKey) return { ok: true, source: "env", key: envKey };
+  if (input.allowServerKeyFallback) {
+    const serverKey = input.serverKey?.trim() ?? "";
+    if (serverKey) return { ok: true, source: "fallback", key: serverKey };
+  }
 
-  return { ok: false, status: 403, error: NO_KEY_MESSAGE };
+  const missing = missingOpenAiKeyError(Boolean(input.serverTestKeyEnabled));
+  return {
+    ok: false,
+    status: missing.status,
+    error: missing.error,
+    code: missing.code,
+    serverTestKeyEnabled: missing.serverTestKeyEnabled,
+  };
 }
 
 export type LimitOk = { ok: true; remaining: number };
@@ -151,6 +205,64 @@ export function resetServerTestKeyLimiter() {
 export type ServerTestKeyAccess =
   | { ok: true }
   | { ok: false; status: 403 | 429; error: string; retryAfter?: number };
+
+export type LlmRequestAccess =
+  | { ok: true; useServerKey: boolean; apiKey?: string }
+  | {
+      ok: false;
+      status: 401 | 403 | 429;
+      error: string;
+      code?: string;
+      retryAfter?: number;
+      serverTestKeyEnabled?: boolean;
+    };
+
+/**
+ * Decide how this request may use a key. The server key is used only with
+ * `x-use-server-key: 1` + ALLOW_SERVER_TEST_KEY, or (if enabled) the
+ * ALLOW_SERVER_KEY_FALLBACK path. Both paths always go through the limiter.
+ */
+export function resolveLlmRequestAccess(
+  request: Request,
+  userKey: string | undefined,
+  opts?: {
+    testKeyEnabled?: boolean;
+    fallbackEnabled?: boolean;
+    limiter?: MemoryWindowLimiter;
+    ip?: string;
+  },
+): LlmRequestAccess {
+  const testKeyEnabled = opts?.testKeyEnabled ?? isServerTestKeyEnabled();
+  const fallbackEnabled = opts?.fallbackEnabled ?? isServerKeyFallbackEnabled();
+  const limitOpts = {
+    limiter: opts?.limiter,
+    ip: opts?.ip,
+  };
+
+  if (wantsServerTestKey(request)) {
+    const access = checkServerTestKeyAccess(request, {
+      enabled: testKeyEnabled,
+      ...limitOpts,
+    });
+    if (!access.ok) return access;
+    return { ok: true, useServerKey: true };
+  }
+
+  if (userKey?.trim()) {
+    return { ok: true, useServerKey: false, apiKey: userKey.trim() };
+  }
+
+  if (fallbackEnabled) {
+    const access = checkServerTestKeyAccess(request, {
+      enabled: true,
+      ...limitOpts,
+    });
+    if (!access.ok) return access;
+    return { ok: true, useServerKey: true };
+  }
+
+  return missingOpenAiKeyError(testKeyEnabled);
+}
 
 export function checkServerTestKeyAccess(
   request: Request,
