@@ -21,6 +21,9 @@ npm run build:catalog   # if standards-catalog.json missing
 |------|----------|--------|
 | `OPENAI_API_KEY` | optional | Server fallback; users can paste their own key on the home page |
 | `LLM_MODEL` | no | default `gpt-4o-mini` |
+| `ALLOW_SERVER_TEST_KEY` | no | Test-only. Set to `1` to show the **Không có key** button and allow `x-use-server-key` requests to use `OPENAI_API_KEY`. Off by default. Requires `OPENAI_API_KEY`. Never expose the key to the client. |
+| `SERVER_TEST_KEY_MAX_CALLS` | no | Per-IP cap for server-key calls (default `20`) |
+| `SERVER_TEST_KEY_WINDOW_MS` | no | Window for that cap in ms (default `3600000` = 1 hour) |
 | `BLOB_READ_WRITE_TOKEN` | optional | only if not using Supabase for sessions |
 | `POSTGRES_URL` / `POSTGRES_PRISMA_URL` / `DATABASE_URL` | **yes on prod** | from Vercel ↔ Supabase Connect |
 

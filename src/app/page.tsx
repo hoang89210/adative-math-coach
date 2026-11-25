@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
-import { apiFetch, getStoredOpenAiKey } from "@/lib/client-api-key";
+import { apiFetch, getStoredOpenAiKey, isUsingServerTestKey } from "@/lib/client-api-key";
 import { GRADE_BANDS, GRADES_K12, gradeLabel } from "@/lib/grades";
 
 export default function Home() {
@@ -36,7 +36,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      if (!getStoredOpenAiKey()) {
+      if (!getStoredOpenAiKey() && !isUsingServerTestKey()) {
         const cont = window.confirm(
           "No OpenAI key saved on this device. Continue anyway? (AI questions need a key — paste one in the yellow box above, or the server key if configured.)",
         );

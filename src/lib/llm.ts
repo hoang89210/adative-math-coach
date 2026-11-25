@@ -1,4 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { NextResponse } from "next/server";
+import { redactSecrets } from "./redact";
+import {
+  checkServerTestKeyAccess,
+  isServerTestKeyEnabled,
+  parseAllowServerTestKeyFlag,
+  selectLlmApiKey,
+  wantsServerTestKey,
+} from "./server-test-key";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 
@@ -7,7 +16,7 @@ export type LlmMessage = {
   content: string;
 };
 
-type LlmContext = { apiKey?: string };
+type LlmContext = { apiKey?: string; useServerKey?: boolean };
 
 const llmContext = new AsyncLocalStorage<LlmContext>();
 
@@ -21,27 +30,50 @@ export function getRequestApiKey(request: Request): string | undefined {
   return raw;
 }
 
-/** Run LLM calls with optional per-request user key (from browser). */
+/**
+ * Run LLM calls with the key the server selects:
+ * - header x-use-server-key: use env OPENAI_API_KEY only if ALLOW_SERVER_TEST_KEY
+ *   is on (rate-limited, rejected otherwise)
+ * - otherwise: optional per-request user key, then env fallback
+ */
 export function withLlmRequestKey<T>(
   request: Request,
   fn: () => Promise<T>,
 ): Promise<T> {
+  if (wantsServerTestKey(request)) {
+    const access = checkServerTestKeyAccess(request);
+    if (!access.ok) {
+      const headers: Record<string, string> = {};
+      if (access.retryAfter) {
+        headers["Retry-After"] = String(access.retryAfter);
+      }
+      return Promise.resolve(
+        NextResponse.json({ error: access.error }, {
+          status: access.status,
+          headers,
+        }) as T,
+      );
+    }
+    return llmContext.run({ useServerKey: true }, fn);
+  }
   const apiKey = getRequestApiKey(request);
   return llmContext.run({ apiKey }, fn);
 }
 
 function resolveApiKey(explicit?: string) {
-  const fromCtx = llmContext.getStore()?.apiKey?.trim();
-  const fromExplicit = explicit?.trim();
-  const fromEnv =
-    process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim();
-  const key = fromExplicit || fromCtx || fromEnv;
-  if (!key) {
-    throw new Error(
-      "No OpenAI API key. Paste your key on the home page, or set OPENAI_API_KEY on the server.",
-    );
+  const ctx = llmContext.getStore();
+  const selected = selectLlmApiKey({
+    useServerKey: Boolean(ctx?.useServerKey),
+    allowServerTestKey: parseAllowServerTestKeyFlag(),
+    serverKey: process.env.OPENAI_API_KEY,
+    userKey: explicit?.trim() || ctx?.apiKey,
+    envKey:
+      process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim(),
+  });
+  if (!selected.ok) {
+    throw new Error(selected.error);
   }
-  return key;
+  return selected.key;
 }
 
 function getModel() {
@@ -66,7 +98,11 @@ function getBaseUrl(apiKey: string) {
 }
 
 export function hasLlmKey(explicit?: string) {
-  const fromCtx = llmContext.getStore()?.apiKey?.trim();
+  const ctx = llmContext.getStore();
+  if (ctx?.useServerKey) {
+    return isServerTestKeyEnabled();
+  }
+  const fromCtx = ctx?.apiKey?.trim();
   return Boolean(
     explicit?.trim() ||
       fromCtx ||
@@ -112,7 +148,9 @@ export async function callLlmJson<T>(params: {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`LLM API error ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error(
+      `LLM API error ${res.status}: ${redactSecrets(text.slice(0, 500))}`,
+    );
   }
 
   const data = (await res.json()) as {

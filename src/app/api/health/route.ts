@@ -1,11 +1,13 @@
 import fs from "fs";
 import path from "path";
-import { NextResponse } from "next/server";
+import { connection, NextResponse } from "next/server";
 import { dbEnabled, getDatabaseUrl, sessionStoreKind } from "@/lib/db/client";
 import { NODES_PATH, RELATIONSHIPS_PATH } from "@/lib/data/paths";
 import { readJsonlFirstLine } from "@/lib/data/read-jsonl";
+import { isServerTestKeyEnabled } from "@/lib/server-test-key";
 
 export async function GET() {
+  await connection();
   const nodesExists = fs.existsSync(NODES_PATH);
   const relationshipsExists = fs.existsSync(RELATIONSHIPS_PATH);
   const mathIndexPath = path.join(process.cwd(), "data", "math-index.json");
@@ -47,6 +49,7 @@ export async function GET() {
 
   return NextResponse.json({
     ok: Boolean(ok && dbOk !== false),
+    serverTestKeyEnabled: isServerTestKeyEnabled(),
     env: {
       hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
       hasXaiKey: Boolean(process.env.XAI_API_KEY?.trim()),
