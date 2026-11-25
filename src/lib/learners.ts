@@ -1,9 +1,10 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import fs from "fs";
 import path from "path";
 import { get, list, put } from "@vercel/blob";
-import type { GradeResult } from "./types/quiz";
 import type { CoverageReport } from "./analytics/coverage";
+import { dbEnabled, dbQuery } from "./db/client";
+import type { GradeResult } from "./types/quiz";
 
 export type MasteryStatus = "unknown" | "emerging" | "mastered" | "stale";
 
@@ -41,6 +42,7 @@ function blobEnabled() {
 }
 
 function learnersDir() {
+  if (process.env.VERCEL) return path.join("/tmp", "amc-learners");
   return path.join(process.cwd(), "data", "learners");
 }
 
@@ -63,12 +65,95 @@ function blobPath(id: string) {
   return `learners/${id}.json`;
 }
 
+function cacheProfile(p: LearnerProfile) {
+  memory.set(p.id, p);
+  memory.set(p.publicCode.toUpperCase(), p);
+}
+
+function rowToProfile(row: Record<string, unknown>): LearnerProfile {
+  return {
+    id: String(row.id),
+    publicCode: String(row.public_code),
+    pinHash: String(row.pin_hash),
+    pinSalt: String(row.pin_salt),
+    createdAt: new Date(String(row.created_at)).toISOString(),
+    updatedAt: new Date(String(row.updated_at)).toISOString(),
+    currentGrade: row.current_grade ? String(row.current_grade) : undefined,
+    jurisdiction: row.jurisdiction ? String(row.jurisdiction) : undefined,
+    sessionIds: Array.isArray(row.session_ids)
+      ? (row.session_ids as string[])
+      : typeof row.session_ids === "string"
+        ? (JSON.parse(row.session_ids) as string[])
+        : [],
+    componentMastery:
+      (row.component_mastery as LearnerProfile["componentMastery"]) || {},
+    coverageHistory:
+      (row.coverage_history as LearnerProfile["coverageHistory"]) || [],
+  };
+}
+
+async function pgSave(profile: LearnerProfile) {
+  await dbQuery(
+    `insert into amc_learners (
+      id, public_code, pin_hash, pin_salt, current_grade, jurisdiction,
+      component_mastery, coverage_history, session_ids, created_at, updated_at
+    ) values (
+      $1::uuid, $2, $3, $4, $5, $6,
+      $7::jsonb, $8::jsonb, $9::jsonb,
+      coalesce($10::timestamptz, now()), now()
+    )
+    on conflict (id) do update set
+      public_code = excluded.public_code,
+      pin_hash = excluded.pin_hash,
+      pin_salt = excluded.pin_salt,
+      current_grade = excluded.current_grade,
+      jurisdiction = excluded.jurisdiction,
+      component_mastery = excluded.component_mastery,
+      coverage_history = excluded.coverage_history,
+      session_ids = excluded.session_ids,
+      updated_at = now()`,
+    [
+      profile.id,
+      profile.publicCode,
+      profile.pinHash,
+      profile.pinSalt,
+      profile.currentGrade || null,
+      profile.jurisdiction || null,
+      JSON.stringify(profile.componentMastery || {}),
+      JSON.stringify(profile.coverageHistory || []),
+      JSON.stringify(profile.sessionIds || []),
+      profile.createdAt || null,
+    ],
+  );
+}
+
+async function pgLoadById(id: string): Promise<LearnerProfile | null> {
+  const r = await dbQuery(`select * from amc_learners where id = $1::uuid`, [
+    id,
+  ]);
+  if (!r.rows[0]) return null;
+  return rowToProfile(r.rows[0] as Record<string, unknown>);
+}
+
+async function pgLoadByCode(code: string): Promise<LearnerProfile | null> {
+  const r = await dbQuery(
+    `select * from amc_learners where upper(public_code) = upper($1) limit 1`,
+    [code],
+  );
+  if (!r.rows[0]) return null;
+  return rowToProfile(r.rows[0] as Record<string, unknown>);
+}
+
 async function saveLearner(profile: LearnerProfile) {
   profile.updatedAt = new Date().toISOString();
-  memory.set(profile.id, profile);
-  memory.set(profile.publicCode.toUpperCase(), profile);
-  const body = JSON.stringify(profile);
+  cacheProfile(profile);
 
+  if (dbEnabled()) {
+    await pgSave(profile);
+    return profile;
+  }
+
+  const body = JSON.stringify(profile);
   if (blobEnabled()) {
     await put(blobPath(profile.id), body, {
       access: "public",
@@ -81,17 +166,35 @@ async function saveLearner(profile: LearnerProfile) {
     return profile;
   }
 
-  ensureDir();
-  fs.writeFileSync(
-    path.join(learnersDir(), `${profile.id}.json`),
-    JSON.stringify(profile, null, 2),
-    "utf8",
-  );
+  try {
+    ensureDir();
+    fs.writeFileSync(
+      path.join(learnersDir(), `${profile.id}.json`),
+      JSON.stringify(profile, null, 2),
+      "utf8",
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Learner save failed (${msg}). On Vercel set POSTGRES_URL (Supabase).`,
+    );
+  }
   return profile;
 }
 
 async function loadById(id: string): Promise<LearnerProfile | null> {
   if (memory.has(id)) return memory.get(id)!;
+
+  if (dbEnabled()) {
+    try {
+      const p = await pgLoadById(id);
+      if (p) cacheProfile(p);
+      return p;
+    } catch (err) {
+      console.error("pg learner load failed", err);
+      return null;
+    }
+  }
 
   if (blobEnabled()) {
     try {
@@ -103,20 +206,22 @@ async function loadById(id: string): Promise<LearnerProfile | null> {
       if (!result || result.statusCode !== 200 || !result.stream) return null;
       const text = await new Response(result.stream).text();
       const p = JSON.parse(text) as LearnerProfile;
-      memory.set(p.id, p);
-      memory.set(p.publicCode.toUpperCase(), p);
+      cacheProfile(p);
       return p;
     } catch {
       return null;
     }
   }
 
-  const file = path.join(learnersDir(), `${id}.json`);
-  if (!fs.existsSync(file)) return null;
-  const p = JSON.parse(fs.readFileSync(file, "utf8")) as LearnerProfile;
-  memory.set(p.id, p);
-  memory.set(p.publicCode.toUpperCase(), p);
-  return p;
+  try {
+    const file = path.join(learnersDir(), `${id}.json`);
+    if (!fs.existsSync(file)) return null;
+    const p = JSON.parse(fs.readFileSync(file, "utf8")) as LearnerProfile;
+    cacheProfile(p);
+    return p;
+  } catch {
+    return null;
+  }
 }
 
 export async function findLearnerByCode(
@@ -124,6 +229,16 @@ export async function findLearnerByCode(
 ): Promise<LearnerProfile | null> {
   const key = code.trim().toUpperCase();
   if (memory.has(key)) return memory.get(key)!;
+
+  if (dbEnabled()) {
+    try {
+      const p = await pgLoadByCode(key);
+      if (p) cacheProfile(p);
+      return p;
+    } catch {
+      return null;
+    }
+  }
 
   if (blobEnabled()) {
     try {
@@ -135,8 +250,7 @@ export async function findLearnerByCode(
         const res = await fetch(b.url, { cache: "no-store" });
         if (!res.ok) continue;
         const p = (await res.json()) as LearnerProfile;
-        memory.set(p.id, p);
-        memory.set(p.publicCode.toUpperCase(), p);
+        cacheProfile(p);
         if (p.publicCode.toUpperCase() === key) return p;
       }
     } catch {
@@ -145,15 +259,18 @@ export async function findLearnerByCode(
     return null;
   }
 
-  ensureDir();
-  for (const f of fs.readdirSync(learnersDir())) {
-    if (!f.endsWith(".json")) continue;
-    const p = JSON.parse(
-      fs.readFileSync(path.join(learnersDir(), f), "utf8"),
-    ) as LearnerProfile;
-    memory.set(p.id, p);
-    memory.set(p.publicCode.toUpperCase(), p);
-    if (p.publicCode.toUpperCase() === key) return p;
+  try {
+    ensureDir();
+    for (const f of fs.readdirSync(learnersDir())) {
+      if (!f.endsWith(".json")) continue;
+      const p = JSON.parse(
+        fs.readFileSync(path.join(learnersDir(), f), "utf8"),
+      ) as LearnerProfile;
+      cacheProfile(p);
+      if (p.publicCode.toUpperCase() === key) return p;
+    }
+  } catch {
+    return null;
   }
   return null;
 }
@@ -168,7 +285,7 @@ export async function createLearner(params: {
     throw new Error("PIN must be 4–6 digits");
   }
   const salt = randomBytes(8).toString("hex");
-  const id = randomBytes(16).toString("hex");
+  const id = randomUUID();
   const profile: LearnerProfile = {
     id,
     publicCode: makePublicCode(),
@@ -219,7 +336,7 @@ export async function mergeDiagnosticIntoLearner(params: {
       status: "unknown" as MasteryStatus,
       correct: 0,
       attempts: 0,
-      lastAt: params.result ? new Date().toISOString() : "",
+      lastAt: new Date().toISOString(),
       lastGrade: params.grade,
     };
     prev.attempts += row.total;
@@ -228,7 +345,6 @@ export async function mergeDiagnosticIntoLearner(params: {
     prev.lastGrade = params.grade;
     const rate = prev.attempts ? prev.correct / prev.attempts : 0;
     if (row.mastered || rate >= 0.85) prev.status = "mastered";
-    else if (rate >= 0.4) prev.status = "emerging";
     else prev.status = "emerging";
     profile.componentMastery[row.componentId] = prev;
   }
@@ -242,8 +358,6 @@ export async function mergeDiagnosticIntoLearner(params: {
     });
     profile.coverageHistory = profile.coverageHistory.slice(-20);
   }
-
-  // mark stale: mastered but not seen in 30+ days — simplified skip for MVP timestamps on merge only
 
   await saveLearner(profile);
   return profile;
@@ -265,4 +379,3 @@ export function publicLearnerView(profile: LearnerProfile) {
       .map(([componentId, m]) => ({ componentId, ...m })),
   };
 }
-

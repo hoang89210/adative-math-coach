@@ -21,9 +21,16 @@ npm run build:catalog   # if standards-catalog.json missing
 |------|----------|--------|
 | `OPENAI_API_KEY` | optional | Server fallback; users can paste their own key on the home page |
 | `LLM_MODEL` | no | default `gpt-4o-mini` |
-| `BLOB_READ_WRITE_TOKEN` | yes on prod | from Vercel Storage → Blob |
+| `BLOB_READ_WRITE_TOKEN` | optional | only if not using Supabase for sessions |
+| `POSTGRES_URL` / `POSTGRES_PRISMA_URL` / `DATABASE_URL` | **yes on prod** | from Vercel ↔ Supabase Connect |
 
 Users can paste an OpenAI key in the yellow **API key** panel (stored in browser `localStorage` only, sent as `x-openai-api-key`).
+
+### Supabase sessions
+
+1. Connect Supabase to the Vercel project (injects `POSTGRES_*`).
+2. Run `supabase/migrations/001_amc_sessions_learners.sql` in Supabase SQL Editor.
+3. Redeploy. Health should show `sessionStore: "supabase"` and `dbOk: true`.
 
 ## Deploy with CLI
 

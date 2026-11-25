@@ -4,6 +4,7 @@ import {
   pickComponentsForDiagnostic,
 } from "@/lib/data/learning-components";
 import { diagnosticBandHint, isHighSchoolGrade } from "@/lib/grades";
+import { logEvent } from "@/lib/events";
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import type { DiagnosticQuestion, DiagnosticTest } from "@/lib/types/quiz";
 
@@ -146,12 +147,17 @@ Rules:
       })),
     };
 
+    await logEvent({
+      kind: "diagnostic_generate",
+      grade,
+      ok: true,
+      meta: { questionCount: test.questions.length, jurisdiction },
+    });
     return NextResponse.json({ ...test, jurisdiction });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    await logEvent({ kind: "diagnostic_generate", ok: false, message });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-});
+  });
 }

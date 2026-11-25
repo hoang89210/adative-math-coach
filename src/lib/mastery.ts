@@ -160,6 +160,4 @@ export async function resolveSessionId(input: string): Promise<string | null> {
   return storeResolveSessionId(input);
 }
 
-export function sessionShortCode(sessionId: string) {
-  return sessionId.replace(/-/g, "").slice(0, 8).toUpperCase();
-}
+export { sessionShortCode } from "./mastery-codes";

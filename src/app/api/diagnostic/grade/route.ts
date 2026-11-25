@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { computeCoverage } from "@/lib/analytics/coverage";
 import { getComponentsByIds } from "@/lib/data/learning-components";
+import { logEvent } from "@/lib/events";
 import { mergeDiagnosticIntoLearner } from "@/lib/learners";
 import { saveMastery } from "@/lib/mastery";
 import type {
@@ -128,15 +129,27 @@ export async function POST(request: NextRequest) {
     });
 
     const sessionId = randomUUID();
-    await saveMastery({
-      id: sessionId,
-      createdAt: new Date().toISOString(),
-      grade,
-      jurisdiction,
-      learnerId,
-      result,
-      coverage,
-    });
+    try {
+      await saveMastery({
+        id: sessionId,
+        createdAt: new Date().toISOString(),
+        grade,
+        jurisdiction,
+        learnerId,
+        result,
+        coverage,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await logEvent({
+        kind: "diagnostic_grade",
+        grade,
+        learnerId,
+        ok: false,
+        message,
+      });
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
     if (learnerId) {
       try {
@@ -152,11 +165,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    await logEvent({
+      kind: "diagnostic_grade",
+      sessionId,
+      learnerId,
+      grade,
+      ok: true,
+      meta: { percent: result.percent, total: result.total },
+    });
+
     return NextResponse.json({ sessionId, result, coverage });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    await logEvent({ kind: "diagnostic_grade", ok: false, message });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
