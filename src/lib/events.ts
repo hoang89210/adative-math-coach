@@ -1,4 +1,5 @@
 import { dbEnabled, dbQuery } from "@/lib/db/client";
+import { scrubMeta } from "@/lib/log-safe";
 
 export type AmcEvent = {
   kind: string;
@@ -31,23 +32,4 @@ export async function logEvent(event: AmcEvent) {
   } catch (err) {
     console.error("amc_events insert failed", err instanceof Error ? err.message : err);
   }
-}
-
-function scrubMeta(meta: Record<string, unknown>) {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(meta)) {
-    const key = k.toLowerCase();
-    if (
-      key.includes("key") ||
-      key.includes("token") ||
-      key.includes("password") ||
-      key.includes("authorization") ||
-      key.includes("pin")
-    ) {
-      continue;
-    }
-    if (typeof v === "string" && v.startsWith("sk-")) continue;
-    out[k] = v;
-  }
-  return out;
 }

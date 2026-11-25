@@ -11,6 +11,11 @@ type LlmContext = { apiKey?: string };
 
 const llmContext = new AsyncLocalStorage<LlmContext>();
 
+/**
+ * Read the optional per-request user key from `x-openai-api-key`.
+ * Never log this header, the raw Request/Headers object, or the returned value.
+ * If you must log request headers, pass them through `redactHeaders` in `@/lib/log-safe`.
+ */
 export function getRequestApiKey(request: Request): string | undefined {
   const raw =
     request.headers.get("x-openai-api-key")?.trim() ||

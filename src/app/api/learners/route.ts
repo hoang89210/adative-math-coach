@@ -5,6 +5,23 @@ import {
   publicLearnerView,
   verifyLearnerPin,
 } from "@/lib/learners";
+import {
+  checkPinLoginRateLimit,
+  clearPinLoginFailures,
+  getClientIp,
+  pinLoginRateKey,
+  recordPinLoginFailure,
+} from "@/lib/pin-rate-limit";
+
+function rateLimitResponse(retryAfterSec: number) {
+  return NextResponse.json(
+    { error: "Too many login attempts. Try again later." },
+    {
+      status: 429,
+      headers: { "Retry-After": String(retryAfterSec) },
+    },
+  );
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,16 +49,26 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "login") {
-      const profile = await verifyLearnerPin(
-        String(body.code ?? ""),
-        String(body.pin ?? ""),
-      );
+      const code = String(body.code ?? "");
+      const key = pinLoginRateKey(getClientIp(request), code);
+      const limit = await checkPinLoginRateLimit(key);
+      if (limit.limited) {
+        return rateLimitResponse(limit.retryAfterSec);
+      }
+
+      const profile = await verifyLearnerPin(code, String(body.pin ?? ""));
       if (!profile) {
+        await recordPinLoginFailure(key);
+        const after = await checkPinLoginRateLimit(key);
+        if (after.limited) {
+          return rateLimitResponse(after.retryAfterSec);
+        }
         return NextResponse.json(
           { error: "Invalid code or PIN" },
           { status: 401 },
         );
       }
+      await clearPinLoginFailures(key);
       return NextResponse.json({
         learnerId: profile.id,
         publicCode: profile.publicCode,
