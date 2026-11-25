@@ -9,10 +9,7 @@ import {
 /**
  * Teacher session-code flow. Reuses the session created by
  * diagnostic-submit.spec.ts (local artifact). Does NOT start or submit a
- * new diagnostic — that would exceed the prod submit cap of 2.
- *
- * Run after diagnostic-submit (RUN_E2E=1). The unknown-code case lives in
- * smoke.spec.ts (read-only).
+ * new diagnostic. Gated behind RUN_E2E=1.
  */
 test.use(noSecretCapture);
 
@@ -38,16 +35,20 @@ test.describe("Teacher session code flow", () => {
     await codeInput.fill(session.shortCode);
     await page.getByRole("button", { name: "Open session" }).click();
 
-    await expect(page.getByRole("heading", { name: "Student snapshot" })).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect(page.locator("span.font-mono", { hasText: session.shortCode })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Student snapshot" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.locator("span.font-mono", { hasText: session.shortCode }),
+    ).toBeVisible();
     const snapshot = page.locator("p").filter({
       hasText: new RegExp(
         `Grade ${session.grade} · ${session.score}/${session.total} \\(${session.percent}%\\)`,
       ),
     });
     await expect(snapshot).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Focus skill" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Focus skill" }),
+    ).toBeVisible();
   });
 });

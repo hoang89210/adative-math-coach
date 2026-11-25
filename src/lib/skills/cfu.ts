@@ -1,4 +1,6 @@
 import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import type { CfuCheck, CfuItem, CfuRigor } from "@/lib/types/skills";
 
 type LlmCfu = {
@@ -155,7 +157,7 @@ Return ONLY JSON:
       };
     }
   } catch (err) {
-    console.error("CFU LLM failed", err);
+    logError("CFU LLM failed", err);
   }
 
   return base;

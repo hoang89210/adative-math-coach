@@ -1,11 +1,48 @@
 import fs from "fs";
 import path from "path";
-import { NextResponse } from "next/server";
+import { connection, NextResponse } from "next/server";
 import { dbEnabled, getDatabaseUrl, sessionStoreKind } from "@/lib/db/client";
 import { NODES_PATH, RELATIONSHIPS_PATH } from "@/lib/data/paths";
 import { readJsonlFirstLine } from "@/lib/data/read-jsonl";
+import { sanitizeDbError } from "@/lib/sanitize-error";
+import {
+  isServerKeyFallbackEnabled,
+  isServerTestKeyEnabled,
+} from "@/lib/server-test-key";
 
+/**
+ * GET /api/health response shape:
+ *
+ * {
+ *   ok: boolean,          // backward-compat overall status
+ *   okContent: boolean,   // required content is loaded: data/math-index.json exists
+ *                         // (nodes.jsonl is optional on Vercel; indexes are enough)
+ *   okDb: boolean | null, // true = `select 1` succeeded;
+ *                         // false = DB configured but the check failed;
+ *                         // null = no DATABASE_URL / POSTGRES_* configured
+ *   dbError?: string,     // only when okDb === false; sanitized (no URI / password / token)
+ *   serverTestKeyEnabled: boolean, // “Không có key” button: ALLOW_SERVER_TEST_KEY=1 and a server key exist
+ *   serverKeyFallbackEnabled: boolean, // server key usable WITHOUT x-use-server-key
+ *                                      // (only when ALLOW_SERVER_KEY_FALLBACK=1 and a server key exist)
+ *   env: {
+ *     hasOpenAiKey,       // server has OPENAI_API_KEY configured (not “usable without a header”)
+ *     acceptsUserApiKey,  // clients may send x-openai-api-key
+ *     serverTestKeyEnabled, serverKeyFallbackEnabled, dbOk, ...
+ *   },
+ *   data: { mathIndexExists, nodesExists, readError, ... }
+ * }
+ *
+ * `ok` is true when okContent is true AND the session store can work:
+ *   - okDb === true, or
+ *   - no DB configured and a non-Postgres store (blob / local-fs / tmp-fs) is in use, or
+ *     a local full JSONL dataset is readable.
+ * If okDb === false, `ok` is false (sessions cannot be saved to Postgres).
+ */
 export async function GET() {
+  // Health must run at request time so okDb / dbError / serverTestKeyEnabled
+  // reflect live env and DB, not a value frozen during `next build`.
+  await connection();
+
   const nodesExists = fs.existsSync(NODES_PATH);
   const relationshipsExists = fs.existsSync(RELATIONSHIPS_PATH);
   const mathIndexPath = path.join(process.cwd(), "data", "math-index.json");
@@ -14,6 +51,7 @@ export async function GET() {
   let sampleNode: unknown = null;
   let readError: string | null = null;
   let dbOk: boolean | null = null;
+  let dbError: string | undefined;
 
   try {
     if (nodesExists) {
@@ -28,29 +66,38 @@ export async function GET() {
       const { dbQuery } = await import("@/lib/db/client");
       await dbQuery("select 1 as ok");
       dbOk = true;
-    } catch {
+    } catch (err) {
       dbOk = false;
+      dbError = sanitizeDbError(err);
     }
   }
 
   const store = sessionStoreKind();
-  const ok =
-    mathIndexExists &&
-    (dbOk === true ||
-      store === "vercel-blob" ||
-      store === "local-fs" ||
-      store === "tmp-fs" ||
-      (!process.env.VERCEL &&
-        nodesExists &&
-        relationshipsExists &&
-        sampleNode !== null));
+  const okContent = mathIndexExists;
+  const okDb = dbOk;
+  const storeFallbackOk =
+    store === "vercel-blob" ||
+    store === "local-fs" ||
+    store === "tmp-fs" ||
+    (!process.env.VERCEL &&
+      nodesExists &&
+      relationshipsExists &&
+      sampleNode !== null);
+  const ok = Boolean(okContent && (okDb === true || (okDb === null && storeFallbackOk)));
 
   return NextResponse.json({
-    ok: Boolean(ok && dbOk !== false),
+    ok,
+    okContent,
+    okDb,
+    ...(dbError ? { dbError } : {}),
+    serverTestKeyEnabled: isServerTestKeyEnabled(),
+    serverKeyFallbackEnabled: isServerKeyFallbackEnabled(),
     env: {
       hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
       hasXaiKey: Boolean(process.env.XAI_API_KEY?.trim()),
       acceptsUserApiKey: true,
+      serverTestKeyEnabled: isServerTestKeyEnabled(),
+      serverKeyFallbackEnabled: isServerKeyFallbackEnabled(),
       hasDatabaseUrl: Boolean(getDatabaseUrl()),
       hasBlobToken: Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim()),
       sessionStore: store,

@@ -14,16 +14,14 @@ import {
  * Key is read from env OPENAI_API_KEY only — never printed, logged, or committed.
  * Capture (trace / screenshot / video) is forced off so the key cannot leak.
  *
- * Gated generate tests: RUN_E2E=1. They start a diagnostic (OpenAI) but do
- * NOT Submit — prod is capped at 2 real submits, reserved for
- * diagnostic-submit.spec.ts (and a spare if Hoàng asks).
+ * Invalid-key validation runs by default. Real OpenAI grade generation runs
+ * only when RUN_E2E=1 (generate only, no Submit).
  */
 const GRADES = ["K", "4", "8", "10"] as const;
 
 test.use(noSecretCapture);
 
 test.describe("Grade matrix + API-key panel", () => {
-
   test("API-key panel rejects a short invalid key without logging it", async ({
     page,
   }) => {
@@ -42,7 +40,10 @@ test.describe("Grade matrix + API-key panel", () => {
       page,
       request,
     }) => {
-      test.skip(!shouldRunE2E(), "Skipped: set RUN_E2E=1 to run write/OpenAI E2E");
+      test.skip(
+        !shouldRunE2E(),
+        "Skipped: set RUN_E2E=1 to run real OpenAI matrix",
+      );
       test.setTimeout(180_000);
 
       const health = await fetchHealth(request);
@@ -58,14 +59,13 @@ test.describe("Grade matrix + API-key panel", () => {
           ? /Start Kindergarten diagnostic/
           : new RegExp(`Start Grade ${grade} diagnostic`);
       await startDiagnosticAndWaitForTest(page, startName);
-      await expect(page.getByRole("heading", { name: /Question 1 of \d+/ })).toBeVisible({
-        timeout: 30_000,
-      });
+      await expect(
+        page.getByRole("heading", { name: /Question 1 of \d+/ }),
+      ).toBeVisible({ timeout: 30_000 });
       const gradeLabel = grade === "K" ? "K" : grade;
       await expect(
         page.getByText(`Grade ${gradeLabel} diagnostic`, { exact: true }),
       ).toBeVisible();
-      // Stop here — do not answer or click Submit (prod submit cap).
       await expect(page.getByRole("button", { name: "Next" })).toBeVisible();
       await expect(page).not.toHaveURL(/\/results/);
     });

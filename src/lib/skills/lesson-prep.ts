@@ -1,4 +1,6 @@
 import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import type { TeacherLesson, TeacherPrepState } from "@/lib/types/skills";
 
 type LlmPrepStart = {
@@ -100,7 +102,7 @@ Return JSON: {"coachReply":"...","readyToFinalize":false}`,
       ),
     });
   } catch (err) {
-    console.error("Prep turn failed", err);
+    logError("Prep turn failed", err);
     next.turns.push({
       role: "coach",
       text: "Thanks. Want a prep note now? Reply “finalize”.",
@@ -149,7 +151,7 @@ Use the dialogue findings. No student-facing worksheet.`,
       });
       if (llm.prepNoteMarkdown) md = String(llm.prepNoteMarkdown);
     } catch (err) {
-      console.error("Prep finalize failed", err);
+      logError("Prep finalize failed", err);
     }
   }
 

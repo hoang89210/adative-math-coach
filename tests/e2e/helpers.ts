@@ -1,15 +1,39 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 
-/** Real write / OpenAI flows stay skipped unless RUN_E2E=1. */
+/** Real write / real-OpenAI flows stay skipped unless RUN_E2E=1. */
 export function shouldRunE2E(): boolean {
   return process.env.RUN_E2E === "1";
 }
 
-/** Thọ hardening checks (okContent/okDb/dbError, PIN rate-limit). */
+/** Optional remote hardening checks (when targeting a live remote env). */
 export function shouldRunHardening(): boolean {
   return process.env.RUN_HARDENING === "1";
+}
+
+export function isRemoteTarget(): boolean {
+  const raw = process.env.BASE_URL?.trim();
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+  } catch {
+    return true;
+  }
+}
+
+export function getConfiguredDatabaseUrl(): string | null {
+  const url =
+    process.env.POSTGRES_PRISMA_URL?.trim() ||
+    process.env.POSTGRES_URL?.trim() ||
+    process.env.DATABASE_URL?.trim() ||
+    process.env.POSTGRES_URL_NON_POOLING?.trim() ||
+    null;
+  return url || null;
 }
 
 export type HealthBody = {
@@ -17,10 +41,14 @@ export type HealthBody = {
   okContent?: boolean;
   okDb?: boolean | null;
   dbError?: string;
+  serverTestKeyEnabled?: boolean;
+  serverKeyFallbackEnabled?: boolean;
   env?: {
     hasOpenAiKey?: boolean;
     hasXaiKey?: boolean;
     acceptsUserApiKey?: boolean;
+    serverTestKeyEnabled?: boolean;
+    serverKeyFallbackEnabled?: boolean;
     hasDatabaseUrl?: boolean;
     hasBlobToken?: boolean;
     sessionStore?: string;
@@ -46,7 +74,8 @@ export type HealthBody = {
  */
 export function redactHealth(body: HealthBody): HealthBody {
   const clone = JSON.parse(JSON.stringify(body)) as HealthBody;
-  const secretish = /api[_-]?key|password|secret|token|authorization|bearer\s+sk-|postgres(?:ql)?:\/\/[^\s]+/i;
+  const secretish =
+    /api[_-]?key|password|secret|token|authorization|bearer\s+sk-|postgres(?:ql)?:\/\/[^\s]+/i;
 
   const walk = (value: unknown): unknown => {
     if (typeof value === "string") {
@@ -84,13 +113,19 @@ export function dbOkValue(body: HealthBody): boolean | null | undefined {
   return body.env?.dbOk;
 }
 
-/** Preconditions for write E2E: health must report dbOk:true. */
+/** Preconditions for DB-backed write E2E: health must report dbOk:true (or local-fs ok:true when local). */
 export function assertDbReady(body: HealthBody): void {
   const dbOk = dbOkValue(body);
-  if (dbOk !== true) {
+  if (body.env?.sessionStore === "supabase" && dbOk !== true) {
     throw new Error(
-      `Precondition failed: health dbOk is ${String(dbOk)} (need true) before write E2E. ` +
-        `Fix Postgres / Supabase first. Redacted health: ${JSON.stringify(redactHealth(body))}`,
+      `Precondition failed: health dbOk is ${String(dbOk)} (need true) before DB write E2E. ` +
+        `Redacted health: ${JSON.stringify(redactHealth(body))}`,
+    );
+  }
+  if (body.ok !== true) {
+    throw new Error(
+      `Precondition failed: health ok is ${String(body.ok)}. ` +
+        `Redacted health: ${JSON.stringify(redactHealth(body))}`,
     );
   }
 }
@@ -110,8 +145,11 @@ export function readOpenAiKeyFromEnv(): string {
   return key;
 }
 
-export async function fillApiKeyPanel(page: Page, compact = false): Promise<void> {
-  const key = readOpenAiKeyFromEnv();
+export async function fillApiKeyPanelWithKey(
+  page: Page,
+  key: string,
+  compact = false,
+): Promise<void> {
   const input = page.getByPlaceholder(/sk-proj-\.\.\. or sk-\.\.\.|sk-\.\.\./);
   await expect(input).toBeVisible();
   await input.fill(key);
@@ -121,28 +159,29 @@ export async function fillApiKeyPanel(page: Page, compact = false): Promise<void
   } else {
     await expect(page.getByText("Key saved on this device")).toBeVisible();
   }
-  // Clear the visible input so Playwright error-context / snapshots cannot
-  // capture the key. localStorage still holds it for apiFetch.
+  // Clear the visible input so Playwright snapshots cannot capture the key.
   await input.fill("");
-  // Do not assert, screenshot, or log the key value.
 }
 
-const GRADE_MATRIX: Record<
-  string,
-  { band: string; button: string }
-> = {
+export async function fillApiKeyPanel(page: Page, compact = false): Promise<void> {
+  await fillApiKeyPanelWithKey(page, readOpenAiKeyFromEnv(), compact);
+}
+
+const GRADE_MATRIX: Record<string, { band: string; button: string }> = {
   K: { band: "K–2", button: "Kindergarten" },
   "4": { band: "3–5", button: "Grade 4" },
   "8": { band: "6–8", button: "Grade 8" },
   "10": { band: "9–12", button: "Grade 10" },
 };
 
-export async function selectGrade(page: Page, grade: "K" | "4" | "8" | "10"): Promise<void> {
+export async function selectGrade(
+  page: Page,
+  grade: "K" | "4" | "8" | "10",
+): Promise<void> {
   const cfg = GRADE_MATRIX[grade];
   await page.getByRole("button", { name: cfg.band, exact: true }).click();
   await page.getByRole("button", { name: cfg.button, exact: true }).click();
 }
-
 
 /** Clear visible API-key inputs without clicking Clear (localStorage stays). */
 export async function maskApiKeyInputs(page: Page): Promise<void> {
@@ -173,7 +212,7 @@ export async function answerCurrentQuestionAndAdvance(
   }
   const submit = page.getByRole("button", { name: "Submit", exact: true });
   const next = page.getByRole("button", { name: "Next", exact: true });
-  if (await submit.isVisible() && (await submit.isEnabled())) {
+  if ((await submit.isVisible()) && (await submit.isEnabled())) {
     await submit.click();
     return "submit";
   }
@@ -184,11 +223,15 @@ export async function answerCurrentQuestionAndAdvance(
 }
 
 /** Answer every remaining diagnostic question and wait for /results. */
-export async function finishDiagnosticAndWaitForResults(page: Page): Promise<void> {
+export async function finishDiagnosticAndWaitForResults(
+  page: Page,
+): Promise<void> {
   for (let i = 0; i < 8; i++) {
     if (page.url().includes("/results")) break;
     if (await page.getByRole("heading", { name: /You scored / }).count()) break;
-    await expect(page.getByRole("heading", { name: /Question \d+ of \d+/ })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /Question \d+ of \d+/ }),
+    ).toBeVisible();
     const step = await answerCurrentQuestionAndAdvance(page);
     if (step === "submit") break;
   }
@@ -196,7 +239,6 @@ export async function finishDiagnosticAndWaitForResults(page: Page): Promise<voi
   await expect(page.getByRole("heading", { name: /You scored / })).toBeVisible();
   await maskApiKeyInputs(page);
 }
-
 
 /** Playwright capture settings that must be used on any test that fills an API key. */
 export const noSecretCapture = {
@@ -262,7 +304,7 @@ export async function readResultsShortCode(page: Page): Promise<string> {
 }
 
 /**
- * Click Start diagnostic and wait for /test. Generate can take ~60s.
+ * Click Start diagnostic and wait for /test. Generate can take ~60s with a real LLM.
  * Fails fast if the home-page error banner appears.
  */
 export async function startDiagnosticAndWaitForTest(
@@ -281,10 +323,254 @@ export async function startDiagnosticAndWaitForTest(
       const msg = (await errorBox.innerText()).trim();
       throw new Error(`Diagnostic generate failed on home: ${msg}`);
     }
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(250);
   }
   if (await errorBox.isVisible().catch(() => false)) {
-    throw new Error(`Diagnostic generate failed on home: ${(await errorBox.innerText()).trim()}`);
+    throw new Error(
+      `Diagnostic generate failed on home: ${(await errorBox.innerText()).trim()}`,
+    );
   }
   await expect(page).toHaveURL(/\/test/);
+}
+
+// ---------------------------------------------------------------------------
+// Per-run manifest for surgical global-teardown cleanup (only THIS run's IDs)
+// ---------------------------------------------------------------------------
+
+export type RunManifest = {
+  sessionIds: string[];
+  learnerIds: string[];
+  rateKeys: string[];
+};
+
+const EMPTY_MANIFEST: RunManifest = {
+  sessionIds: [],
+  learnerIds: [],
+  rateKeys: [],
+};
+
+export function runManifestPath(): string {
+  return path.join(process.cwd(), "e2e-artifacts", "run-manifest.json");
+}
+
+function withManifestLock<T>(fn: () => T): T {
+  const dir = path.dirname(runManifestPath());
+  fs.mkdirSync(dir, { recursive: true });
+  const lockPath = path.join(dir, "run-manifest.lock");
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        return fn();
+      } finally {
+        fs.closeSync(fd);
+        fs.unlinkSync(lockPath);
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "EEXIST" || Date.now() > deadline) {
+        // Stale lock recovery if expired
+        if (code === "EEXIST") {
+          try {
+            fs.unlinkSync(lockPath);
+            continue;
+          } catch {
+            // fall through
+          }
+        }
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15);
+    }
+  }
+}
+
+export function resetRunManifest(): void {
+  withManifestLock(() => {
+    fs.writeFileSync(
+      runManifestPath(),
+      JSON.stringify(EMPTY_MANIFEST, null, 2),
+      "utf8",
+    );
+  });
+}
+
+export function readRunManifest(): RunManifest {
+  const p = runManifestPath();
+  if (!fs.existsSync(p)) return { ...EMPTY_MANIFEST };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<RunManifest>;
+    return {
+      sessionIds: Array.isArray(parsed.sessionIds) ? parsed.sessionIds : [],
+      learnerIds: Array.isArray(parsed.learnerIds) ? parsed.learnerIds : [],
+      rateKeys: Array.isArray(parsed.rateKeys) ? parsed.rateKeys : [],
+    };
+  } catch {
+    return { ...EMPTY_MANIFEST };
+  }
+}
+
+export function clearRunManifest(): void {
+  const p = runManifestPath();
+  if (fs.existsSync(p)) {
+    fs.unlinkSync(p);
+  }
+}
+
+function appendManifestEntry(kind: keyof RunManifest, value: string): void {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  withManifestLock(() => {
+    const cur = readRunManifest();
+    if (!cur[kind].includes(trimmed)) {
+      cur[kind].push(trimmed);
+      fs.writeFileSync(runManifestPath(), JSON.stringify(cur, null, 2), "utf8");
+    }
+  });
+}
+
+export function trackCreatedSession(sessionId: string): void {
+  appendManifestEntry("sessionIds", sessionId);
+}
+
+export function trackCreatedLearner(learnerId: string): void {
+  appendManifestEntry("learnerIds", learnerId);
+}
+
+export function trackCreatedRateKey(rateKey: string): void {
+  appendManifestEntry("rateKeys", rateKey);
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral local Next.js & TCP blackhole servers (for isolated feature specs)
+// ---------------------------------------------------------------------------
+
+export async function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      srv.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+/** Accept TCP connections and never write anything — simulates a hung Postgres endpoint. */
+export async function startBlackholeTcpServer(): Promise<{
+  port: number;
+  close: () => Promise<void>;
+}> {
+  const sockets = new Set<net.Socket>();
+  const srv = net.createServer((sock) => {
+    sockets.add(sock);
+    sock.on("close", () => sockets.delete(sock));
+  });
+  await new Promise<void>((resolve, reject) => {
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => resolve());
+  });
+  const addr = srv.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
+  return {
+    port,
+    close: async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    },
+  };
+}
+
+/**
+ * Start an isolated `next start` instance (requires `.next` already built)
+ * with clean DB/OpenAI env vars plus overrides. Used to test server-test-key
+ * flags and hung-DB fail-fast 503s without touching prod or real OpenAI.
+ */
+export async function startEphemeralAppServer(
+  envOverrides: Record<string, string>,
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const port = await getFreePort();
+  const nextBin = path.join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+  if (!fs.existsSync(path.join(process.cwd(), ".next", "BUILD_ID"))) {
+    throw new Error(".next/BUILD_ID missing — run `npm run build` before starting ephemeral Next server.");
+  }
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: process.env.NODE_ENV || "production",
+  };
+  // Safe baseline isolation
+  env.DATABASE_URL = "";
+  env.POSTGRES_URL = "";
+  env.POSTGRES_PRISMA_URL = "";
+  env.POSTGRES_URL_NON_POOLING = "";
+  env.BLOB_READ_WRITE_TOKEN = "";
+  env.OPENAI_API_KEY = "";
+  env.XAI_API_KEY = "";
+  env.ALLOW_SERVER_TEST_KEY = "";
+  env.ALLOW_SERVER_KEY_FALLBACK = "";
+  env.LLM_BASE_URL = "http://127.0.0.1:1/v1";
+  Object.assign(env, envOverrides);
+
+  const child: ChildProcess = spawn(
+    process.execPath,
+    [nextBin, "start", "-H", "127.0.0.1", "-p", String(port)],
+    {
+      cwd: process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  let logs = "";
+  child.stdout?.on("data", (d: Buffer) => {
+    logs += d.toString("utf8").slice(-2000);
+  });
+  child.stderr?.on("data", (d: Buffer) => {
+    logs += d.toString("utf8").slice(-2000);
+  });
+
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + 20_000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`Ephemeral next start exited early (${child.exitCode}): ${logs}`);
+    }
+    try {
+      const res = await fetch(`${baseUrl}/api/config`);
+      if (res.ok) {
+        ready = true;
+        break;
+      }
+    } catch {
+      // keep polling
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  if (!ready) {
+    child.kill("SIGKILL");
+    throw new Error(`Ephemeral next start timed out on ${baseUrl}: ${logs}`);
+  }
+
+  return {
+    baseUrl,
+    close: async () => {
+      if (child.exitCode !== null) return;
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 3_000);
+        child.once("exit", () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+    },
+  };
 }
