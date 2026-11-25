@@ -9,15 +9,18 @@ const baseURL =
   process.env.BASE_URL?.trim() || "https://adative-math-coach.vercel.app";
 
 const runE2E = process.env.RUN_E2E === "1";
+if (runE2E) process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  globalTeardown: "./tests/e2e/global-teardown.ts",
   fullyParallel: !runE2E,
   forbidOnly: !!process.env.CI,
   // Never retry write/OpenAI runs — a retry would burn the prod submit cap.
   retries: runE2E ? 0 : process.env.CI ? 2 : 0,
   workers: runE2E ? 1 : process.env.CI ? 2 : undefined,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // HTML reporter is disabled for RUN_E2E so a failure snapshot cannot archive the API key.
+  reporter: runE2E ? [["list"]] : [["list"], ["html", { open: "never" }]],
   timeout: 30_000,
   expect: { timeout: 10_000 },
   use: {

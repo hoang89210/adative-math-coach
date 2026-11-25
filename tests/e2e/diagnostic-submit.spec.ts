@@ -10,6 +10,7 @@ import {
   saveE2ESession,
   selectGrade,
   shouldRunE2E,
+  startDiagnosticAndWaitForTest,
 } from "./helpers";
 
 /**
@@ -45,11 +46,9 @@ test.describe("Diagnostic submit → amc_sessions", () => {
     await page.goto("/");
     await fillApiKeyPanel(page);
     await selectGrade(page, "4");
-    await page.getByRole("button", { name: /Start Grade 4 diagnostic/ }).click();
-
-    await expect(page).toHaveURL(/\/test/);
-    await expect(page.getByText(/Question 1 of \d+/)).toBeVisible({
-      timeout: 90_000,
+    await startDiagnosticAndWaitForTest(page, /Start Grade 4 diagnostic/);
+    await expect(page.getByRole("heading", { name: /Question 1 of \d+/ })).toBeVisible({
+      timeout: 30_000,
     });
 
     await finishDiagnosticAndWaitForResults(page);

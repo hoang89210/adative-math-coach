@@ -121,6 +121,9 @@ export async function fillApiKeyPanel(page: Page, compact = false): Promise<void
   } else {
     await expect(page.getByText("Key saved on this device")).toBeVisible();
   }
+  // Clear the visible input so Playwright error-context / snapshots cannot
+  // capture the key. localStorage still holds it for apiFetch.
+  await input.fill("");
   // Do not assert, screenshot, or log the key value.
 }
 
@@ -140,18 +143,58 @@ export async function selectGrade(page: Page, grade: "K" | "4" | "8" | "10"): Pr
   await page.getByRole("button", { name: cfg.button, exact: true }).click();
 }
 
+
+/** Clear visible API-key inputs without clicking Clear (localStorage stays). */
+export async function maskApiKeyInputs(page: Page): Promise<void> {
+  const input = page.getByPlaceholder(/sk-proj-\.\.\. or sk-\.\.\.|sk-\.\.\./);
+  const n = await input.count();
+  for (let i = 0; i < n; i++) {
+    const el = input.nth(i);
+    if (await el.isVisible().catch(() => false)) {
+      await el.fill("");
+    }
+  }
+}
+
 /** Answer the current diagnostic item, then advance (Next / Submit). */
-export async function answerCurrentQuestionAndAdvance(page: Page): Promise<void> {
-  const option = page.locator("div.rounded-2xl button[type='button']").first();
+export async function answerCurrentQuestionAndAdvance(
+  page: Page,
+): Promise<"next" | "submit"> {
+  const heading = page.getByRole("heading", { name: /Question \d+ of \d+/ });
+  const current = (await heading.innerText()).trim();
+  const option = page.locator("div.rounded-2xl button[type='button']");
   const typed = page.getByPlaceholder("Type your answer");
   if (await option.count()) {
-    await option.click();
+    await option.first().click();
   } else if (await typed.count()) {
     await typed.fill("42");
   } else {
     throw new Error("TODO: no known answer control found on diagnostic question");
   }
-  await page.getByRole("button", { name: /^(Next|Submit)$/ }).click();
+  const submit = page.getByRole("button", { name: "Submit", exact: true });
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  if (await submit.isVisible() && (await submit.isEnabled())) {
+    await submit.click();
+    return "submit";
+  }
+  await expect(next).toBeEnabled();
+  await next.click();
+  await expect(heading).not.toHaveText(current, { timeout: 15_000 });
+  return "next";
+}
+
+/** Answer every remaining diagnostic question and wait for /results. */
+export async function finishDiagnosticAndWaitForResults(page: Page): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    if (page.url().includes("/results")) break;
+    if (await page.getByRole("heading", { name: /You scored / }).count()) break;
+    await expect(page.getByRole("heading", { name: /Question \d+ of \d+/ })).toBeVisible();
+    const step = await answerCurrentQuestionAndAdvance(page);
+    if (step === "submit") break;
+  }
+  await expect(page).toHaveURL(/\/results/, { timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: /You scored / })).toBeVisible();
+  await maskApiKeyInputs(page);
 }
 
 
@@ -190,7 +233,8 @@ export function makeE2ELabel(now = new Date()): string {
 }
 
 export function sessionArtifactPath(): string {
-  return path.join(process.cwd(), "test-results", "e2e-prod-session.json");
+  // Not under test-results/: Playwright empties that folder at the start of each run.
+  return path.join(process.cwd(), "e2e-artifacts", "e2e-prod-session.json");
 }
 
 export function saveE2ESession(data: SavedE2ESession): void {
@@ -200,10 +244,10 @@ export function saveE2ESession(data: SavedE2ESession): void {
 }
 
 export function loadE2ESession(): SavedE2ESession | null {
-  const p = sessionArtifactPath();
-  if (!fs.existsSync(p)) return null;
+  const pth = sessionArtifactPath();
+  if (!fs.existsSync(pth)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, "utf8")) as SavedE2ESession;
+    return JSON.parse(fs.readFileSync(pth, "utf8")) as SavedE2ESession;
   } catch {
     return null;
   }
@@ -217,14 +261,30 @@ export async function readResultsShortCode(page: Page): Promise<string> {
   return codeText;
 }
 
-/** Answer every remaining diagnostic question and wait for /results. */
-export async function finishDiagnosticAndWaitForResults(page: Page): Promise<void> {
-  for (let i = 0; i < 8; i++) {
-    if (page.url().includes("/results")) break;
-    if (await page.getByRole("heading", { name: /You scored / }).count()) break;
-    await expect(page.getByText(/Question \d+ of \d+/)).toBeVisible();
-    await answerCurrentQuestionAndAdvance(page);
+/**
+ * Click Start diagnostic and wait for /test. Generate can take ~60s.
+ * Fails fast if the home-page error banner appears.
+ */
+export async function startDiagnosticAndWaitForTest(
+  page: Page,
+  startButtonName: RegExp | string,
+): Promise<void> {
+  await page.getByRole("button", { name: startButtonName }).click();
+  const errorBox = page.locator("p.text-red-700");
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    if (page.url().includes("/test")) {
+      await maskApiKeyInputs(page);
+      return;
+    }
+    if (await errorBox.isVisible().catch(() => false)) {
+      const msg = (await errorBox.innerText()).trim();
+      throw new Error(`Diagnostic generate failed on home: ${msg}`);
+    }
+    await page.waitForTimeout(500);
   }
-  await expect(page).toHaveURL(/\/results/, { timeout: 90_000 });
-  await expect(page.getByRole("heading", { name: /You scored / })).toBeVisible();
+  if (await errorBox.isVisible().catch(() => false)) {
+    throw new Error(`Diagnostic generate failed on home: ${(await errorBox.innerText()).trim()}`);
+  }
+  await expect(page).toHaveURL(/\/test/);
 }

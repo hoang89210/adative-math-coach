@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   loadE2ESession,
+  maskApiKeyInputs,
   noSecretCapture,
   shouldRunE2E,
 } from "./helpers";
@@ -29,6 +30,7 @@ test.describe("Teacher session code flow", () => {
     console.log("[e2e] teacher using", session.label, session.shortCode);
 
     await page.goto("/teacher");
+    await maskApiKeyInputs(page);
     await expect(
       page.getByRole("heading", { name: "Plan from student diagnostic" }),
     ).toBeVisible();
@@ -40,15 +42,12 @@ test.describe("Teacher session code flow", () => {
       timeout: 30_000,
     });
     await expect(page.locator("span.font-mono", { hasText: session.shortCode })).toBeVisible();
-    await expect(page.getByText(new RegExp(`Grade ${session.grade}`))).toBeVisible();
-    if (session.score != null && session.total != null) {
-      await expect(
-        page.getByText(new RegExp(`${session.score}/${session.total}`)),
-      ).toBeVisible();
-    }
-    if (session.percent != null) {
-      await expect(page.getByText(new RegExp(`\\(${session.percent}%\\)`))).toBeVisible();
-    }
+    const snapshot = page.locator("p").filter({
+      hasText: new RegExp(
+        `Grade ${session.grade} · ${session.score}/${session.total} \\(${session.percent}%\\)`,
+      ),
+    });
+    await expect(snapshot).toBeVisible();
     await expect(page.getByRole("heading", { name: "Focus skill" })).toBeVisible();
   });
 });

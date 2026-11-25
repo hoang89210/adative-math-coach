@@ -6,6 +6,7 @@ import {
   noSecretCapture,
   selectGrade,
   shouldRunE2E,
+  startDiagnosticAndWaitForTest,
 } from "./helpers";
 
 /**
@@ -56,14 +57,14 @@ test.describe("Grade matrix + API-key panel", () => {
         grade === "K"
           ? /Start Kindergarten diagnostic/
           : new RegExp(`Start Grade ${grade} diagnostic`);
-      await page.getByRole("button", { name: startName }).click();
-
-      await expect(page).toHaveURL(/\/test/);
-      await expect(page.getByText(/Question 1 of \d+/)).toBeVisible({
-        timeout: 90_000,
+      await startDiagnosticAndWaitForTest(page, startName);
+      await expect(page.getByRole("heading", { name: /Question 1 of \d+/ })).toBeVisible({
+        timeout: 30_000,
       });
       const gradeLabel = grade === "K" ? "K" : grade;
-      await expect(page.getByText(new RegExp(`Grade ${gradeLabel} diagnostic`))).toBeVisible();
+      await expect(
+        page.getByText(`Grade ${gradeLabel} diagnostic`, { exact: true }),
+      ).toBeVisible();
       // Stop here — do not answer or click Submit (prod submit cap).
       await expect(page.getByRole("button", { name: "Next" })).toBeVisible();
       await expect(page).not.toHaveURL(/\/results/);
