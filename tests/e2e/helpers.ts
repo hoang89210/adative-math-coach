@@ -1,4 +1,6 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 
 /** Real write / OpenAI flows stay skipped unless RUN_E2E=1. */
 export function shouldRunE2E(): boolean {
@@ -150,4 +152,79 @@ export async function answerCurrentQuestionAndAdvance(page: Page): Promise<void>
     throw new Error("TODO: no known answer control found on diagnostic question");
   }
   await page.getByRole("button", { name: /^(Next|Submit)$/ }).click();
+}
+
+
+/** Playwright capture settings that must be used on any test that fills an API key. */
+export const noSecretCapture = {
+  trace: "off" as const,
+  screenshot: "off" as const,
+  video: "off" as const,
+};
+
+export type SavedE2ESession = {
+  label: string;
+  sessionId: string;
+  shortCode: string;
+  grade: string;
+  score?: number;
+  total?: number;
+  percent?: number;
+  createdAt: string;
+};
+
+/** Run tag e.g. e2e-test-20261125-154530 (Asia/Bangkok). Not a DB column. */
+export function makeE2ELabel(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `e2e-test-${get("year")}${get("month")}${get("day")}-${get("hour")}${get("minute")}${get("second")}`;
+}
+
+export function sessionArtifactPath(): string {
+  return path.join(process.cwd(), "test-results", "e2e-prod-session.json");
+}
+
+export function saveE2ESession(data: SavedE2ESession): void {
+  const dir = path.dirname(sessionArtifactPath());
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(sessionArtifactPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+export function loadE2ESession(): SavedE2ESession | null {
+  const p = sessionArtifactPath();
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")) as SavedE2ESession;
+  } catch {
+    return null;
+  }
+}
+
+export async function readResultsShortCode(page: Page): Promise<string> {
+  const codeLabel = page.locator("span", { hasText: /^Code [A-Z0-9]{8}$/ });
+  await expect(codeLabel).toBeVisible();
+  const codeText = (await codeLabel.innerText()).replace(/^Code\s+/, "").trim();
+  expect(codeText).toMatch(/^[A-Z0-9]{8}$/);
+  return codeText;
+}
+
+/** Answer every remaining diagnostic question and wait for /results. */
+export async function finishDiagnosticAndWaitForResults(page: Page): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    if (page.url().includes("/results")) break;
+    if (await page.getByRole("heading", { name: /You scored / }).count()) break;
+    await expect(page.getByText(/Question \d+ of \d+/)).toBeVisible();
+    await answerCurrentQuestionAndAdvance(page);
+  }
+  await expect(page).toHaveURL(/\/results/, { timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: /You scored / })).toBeVisible();
 }

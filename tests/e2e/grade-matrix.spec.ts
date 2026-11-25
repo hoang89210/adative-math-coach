@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
-  answerCurrentQuestionAndAdvance,
   assertDbReady,
   fetchHealth,
   fillApiKeyPanel,
+  noSecretCapture,
   selectGrade,
   shouldRunE2E,
 } from "./helpers";
@@ -11,11 +11,18 @@ import {
 /**
  * Grade matrix K, 4, 8, 10 using the yellow API-key panel.
  * Key is read from env OPENAI_API_KEY only — never printed, logged, or committed.
- * Gated with RUN_E2E=1 (each row calls OpenAI and may write a session).
+ * Capture (trace / screenshot / video) is forced off so the key cannot leak.
+ *
+ * Gated generate tests: RUN_E2E=1. They start a diagnostic (OpenAI) but do
+ * NOT Submit — prod is capped at 2 real submits, reserved for
+ * diagnostic-submit.spec.ts (and a spare if Hoàng asks).
  */
 const GRADES = ["K", "4", "8", "10"] as const;
 
+test.use(noSecretCapture);
+
 test.describe("Grade matrix + API-key panel", () => {
+
   test("API-key panel rejects a short invalid key without logging it", async ({
     page,
   }) => {
@@ -30,7 +37,7 @@ test.describe("Grade matrix + API-key panel", () => {
   });
 
   for (const grade of GRADES) {
-    test(`Grade ${grade}: generate diagnostic via saved user key`, async ({
+    test(`Grade ${grade}: generate diagnostic via saved user key (no submit)`, async ({
       page,
       request,
     }) => {
@@ -57,15 +64,9 @@ test.describe("Grade matrix + API-key panel", () => {
       });
       const gradeLabel = grade === "K" ? "K" : grade;
       await expect(page.getByText(new RegExp(`Grade ${gradeLabel} diagnostic`))).toBeVisible();
-
-      // Answer and submit so we also confirm grade is persisted on results.
-      for (let i = 0; i < 8; i++) {
-        if (await page.getByRole("heading", { name: /You scored / }).count()) break;
-        await expect(page.getByText(/Question \d+ of \d+/)).toBeVisible();
-        await answerCurrentQuestionAndAdvance(page);
-      }
-      await expect(page).toHaveURL(/\/results/, { timeout: 90_000 });
-      await expect(page.getByText(new RegExp(`Grade ${gradeLabel} results`))).toBeVisible();
+      // Stop here — do not answer or click Submit (prod submit cap).
+      await expect(page.getByRole("button", { name: "Next" })).toBeVisible();
+      await expect(page).not.toHaveURL(/\/results/);
     });
   }
 });

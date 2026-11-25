@@ -250,3 +250,17 @@ Config: `playwright.config.ts` — `baseURL` từ `BASE_URL`, mặc định prod
 4. Có nên thêm `data-testid` (ví dụ `api-key-input`, `grade-{id}`, `start-diagnostic`, `session-code-input`) để ổn định selector?
 5. Learner PIN + `/progress` có nằm trong vòng E2E tiếp theo không?
 
+
+
+---
+
+## 9. Vòng chạy production (cap Submit)
+
+Khi chạy `RUN_E2E=1` trên **production**:
+
+- Tối đa **2** lần bấm Submit diagnostic trên prod. File `diagnostic-submit.spec.ts` dùng 1 submit (Grade 4). `teacher-session.spec.ts` **tái sử dụng** session đã lưu trong `test-results/e2e-prod-session.json`. `grade-matrix.spec.ts` chỉ **generate** (tới Question 1), không Submit.
+- Không retry Playwright khi `RUN_E2E=1` (tránh Submit lần hai vì fail tạm thời).
+- Trace / video / screenshot **tắt** khi `RUN_E2E=1` để không ghi OPENAI_API_KEY.
+- App **không có** trường tên học sinh. Tag `e2e-test-<yyyyMMdd-HHmmss>` (Asia/Bangkok) chỉ là nhãn lần chạy trong artifact + báo cáo. Lọc DB theo `id` / `short_code`, không theo tên.
+- `RUN_HARDENING=1` (PIN 429) không chạy mặc định trên prod.
+
