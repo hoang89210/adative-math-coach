@@ -2,6 +2,8 @@ import { get, list, put } from "@vercel/blob";
 import fs from "fs";
 import path from "path";
 import { dbEnabled, dbQuery } from "@/lib/db/client";
+import { logError } from "@/lib/log-safe";
+
 import type { MasteryRecord } from "./mastery-types";
 import { sessionShortCode } from "./mastery-codes";
 
@@ -159,7 +161,7 @@ export async function storeLoad(id: string): Promise<MasteryRecord | null> {
       if (rec) memory.set(id, rec);
       return rec;
     } catch (err) {
-      console.error("pg session load failed", err);
+      logError("pg session load failed", err);
       return null;
     }
   }

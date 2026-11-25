@@ -5,6 +5,24 @@ import {
   publicLearnerView,
   verifyLearnerPin,
 } from "@/lib/learners";
+import { isDbTimeoutError } from "@/lib/db/client";
+import { sanitizeDbError } from "@/lib/sanitize-error";
+import {
+  checkPinLoginLimits,
+  clearPinLoginFailures,
+  getClientIp,
+  recordPinLoginFailure,
+} from "@/lib/pin-rate-limit";
+
+function rateLimitResponse(retryAfterSec: number) {
+  return NextResponse.json(
+    { error: "Too many login attempts. Try again later." },
+    {
+      status: 429,
+      headers: { "Retry-After": String(retryAfterSec) },
+    },
+  );
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,16 +50,26 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "login") {
-      const profile = await verifyLearnerPin(
-        String(body.code ?? ""),
-        String(body.pin ?? ""),
-      );
+      const code = String(body.code ?? "");
+      const ip = getClientIp(request);
+      const limit = await checkPinLoginLimits(ip, code);
+      if (limit.limited) {
+        return rateLimitResponse(limit.retryAfterSec);
+      }
+
+      const profile = await verifyLearnerPin(code, String(body.pin ?? ""));
       if (!profile) {
+        await recordPinLoginFailure(ip, code);
+        const after = await checkPinLoginLimits(ip, code);
+        if (after.limited) {
+          return rateLimitResponse(after.retryAfterSec);
+        }
         return NextResponse.json(
           { error: "Invalid code or PIN" },
           { status: 401 },
         );
       }
+      await clearPinLoginFailures(ip, code);
       return NextResponse.json({
         learnerId: profile.id,
         publicCode: profile.publicCode,
@@ -62,9 +90,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
+    const status = isDbTimeoutError(err) ? 503 : 500;
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
+      { error: sanitizeDbError(err) || "Request failed" },
+      { status },
     );
   }
 }

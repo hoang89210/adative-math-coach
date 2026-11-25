@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
-import { redactSecrets } from "./redact";
-import { getClientIp } from "./request-ip";
+import { redactSecretString } from "./log-safe";
+import { getClientIp } from "./pin-rate-limit-core";
 import {
   MemoryWindowLimiter,
   checkServerTestKeyAccess,
@@ -237,13 +237,13 @@ describe("getClientIp", () => {
   });
 });
 
-describe("redactSecrets", () => {
-  test("strips sk- keys and env OPENAI_API_KEY from strings", () => {
+describe("redactSecretString (shared log-safe path)", () => {
+  test("strips sk- keys including the server test key from strings", () => {
     process.env.OPENAI_API_KEY = SERVER_KEY;
     const leaked = `Incorrect API key provided: ${SERVER_KEY} also sk-proj-abc1234****ZZZ`;
-    const cleaned = redactSecrets(leaked);
+    const cleaned = redactSecretString(leaked);
     assert.equal(cleaned.includes(SERVER_KEY), false);
-    assert.equal(cleaned.includes("sk-proj-abc"), false);
-    assert.match(cleaned, /\[redacted\]|sk-\[redacted\]/);
+    assert.doesNotMatch(cleaned, /sk-/);
+    assert.match(cleaned, /\[redacted\]/);
   });
 });

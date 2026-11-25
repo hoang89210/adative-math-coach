@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/lib/server-test-key.test.ts",
+    "test": "tsx --test src/lib/*.test.ts src/lib/db/*.test.ts",
     "build:index": "node scripts/build-math-index.mjs",
     "build:progression": "node scripts/build-progression-index.mjs",
     "build:catalog": "node scripts/build-standards-catalog.mjs",

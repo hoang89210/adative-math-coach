@@ -1,4 +1,6 @@
 import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import type { StudySheet } from "@/lib/types/quiz";
 import type {
   DiffGroup,
@@ -211,7 +213,7 @@ Return ONLY JSON:
       };
     }
   } catch (err) {
-    console.error("Differentiate LLM failed", err);
+    logError("Differentiate LLM failed", err);
   }
 
   return base;

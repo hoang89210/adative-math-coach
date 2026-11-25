@@ -1,4 +1,4 @@
-import { getClientIp } from "./request-ip";
+import { getClientIp } from "./pin-rate-limit-core";
 
 /** Client header that requests server-key (test) mode. Server still decides. */
 export const SERVER_TEST_KEY_HEADER = "x-use-server-key";
