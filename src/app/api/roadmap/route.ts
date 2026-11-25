@@ -6,7 +6,7 @@ import {
   orderComponentsByProgression,
   priorityTier,
 } from "@/lib/data/progression";
-import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import { loadMastery, updateMasteryRoadmap } from "@/lib/mastery";
 import type { CoachPriority, Roadmap } from "@/lib/types/quiz";
 
@@ -99,6 +99,7 @@ function buildLocalCoachPlan(input: {
 }
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       sessionId?: string;
@@ -281,4 +282,5 @@ Rules:
       { status: 500 },
     );
   }
+});
 }

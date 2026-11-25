@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { ApiKeyPanel } from "@/components/ApiKeyPanel";
+import { apiFetch, getStoredOpenAiKey } from "@/lib/client-api-key";
 import { GRADE_BANDS, GRADES_K12, gradeLabel } from "@/lib/grades";
 
 export default function Home() {
@@ -34,7 +36,16 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/diagnostic/generate", {
+      if (!getStoredOpenAiKey()) {
+        const cont = window.confirm(
+          "No OpenAI key saved on this device. Continue anyway? (AI questions need a key — paste one in the yellow box above, or the server key if configured.)",
+        );
+        if (!cont) {
+          setLoading(false);
+          return;
+        }
+      }
+      const res = await apiFetch("/api/diagnostic/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ grade, jurisdiction }),
@@ -114,6 +125,8 @@ export default function Home() {
           </p>
         </Link>
       </div>
+
+      <ApiKeyPanel />
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-zinc-900">

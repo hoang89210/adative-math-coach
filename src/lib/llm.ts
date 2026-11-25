@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 const DEFAULT_MODEL = "gpt-4o-mini";
 
 export type LlmMessage = {
@@ -5,11 +7,39 @@ export type LlmMessage = {
   content: string;
 };
 
-function getApiKey() {
-  const key =
+type LlmContext = { apiKey?: string };
+
+const llmContext = new AsyncLocalStorage<LlmContext>();
+
+export function getRequestApiKey(request: Request): string | undefined {
+  const raw =
+    request.headers.get("x-openai-api-key")?.trim() ||
+    request.headers.get("X-OpenAI-Api-Key")?.trim() ||
+    "";
+  if (!raw) return undefined;
+  if (!raw.startsWith("sk-") || raw.length < 20) return undefined;
+  return raw;
+}
+
+/** Run LLM calls with optional per-request user key (from browser). */
+export function withLlmRequestKey<T>(
+  request: Request,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const apiKey = getRequestApiKey(request);
+  return llmContext.run({ apiKey }, fn);
+}
+
+function resolveApiKey(explicit?: string) {
+  const fromCtx = llmContext.getStore()?.apiKey?.trim();
+  const fromExplicit = explicit?.trim();
+  const fromEnv =
     process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim();
+  const key = fromExplicit || fromCtx || fromEnv;
   if (!key) {
-    throw new Error("OPENAI_API_KEY is not set in .env.local");
+    throw new Error(
+      "No OpenAI API key. Paste your key on the home page, or set OPENAI_API_KEY on the server.",
+    );
   }
   return key;
 }
@@ -18,23 +48,35 @@ function getModel() {
   return process.env.LLM_MODEL?.trim() || DEFAULT_MODEL;
 }
 
-function getBaseUrl() {
+function getBaseUrl(apiKey: string) {
   if (process.env.LLM_BASE_URL?.trim()) {
     return process.env.LLM_BASE_URL.trim().replace(/\/$/, "");
   }
-  if (process.env.OPENAI_API_KEY?.trim()) {
+  // User-provided sk- keys always go to OpenAI
+  if (apiKey.startsWith("sk-") && !apiKey.startsWith("sk-or-")) {
+    if (process.env.XAI_API_KEY?.trim() && apiKey === process.env.XAI_API_KEY.trim()) {
+      return "https://api.x.ai/v1";
+    }
     return "https://api.openai.com/v1";
   }
-  if (process.env.XAI_API_KEY?.trim()) {
+  if (process.env.XAI_API_KEY?.trim() && !process.env.OPENAI_API_KEY?.trim()) {
     return "https://api.x.ai/v1";
   }
   return "https://api.openai.com/v1";
 }
 
-export function hasLlmKey() {
+export function hasLlmKey(explicit?: string) {
+  const fromCtx = llmContext.getStore()?.apiKey?.trim();
   return Boolean(
-    process.env.OPENAI_API_KEY?.trim() || process.env.XAI_API_KEY?.trim(),
+    explicit?.trim() ||
+      fromCtx ||
+      process.env.OPENAI_API_KEY?.trim() ||
+      process.env.XAI_API_KEY?.trim(),
   );
+}
+
+export function hasServerOpenAiKey() {
+  return Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
 export async function callLlmJson<T>(params: {
@@ -42,12 +84,12 @@ export async function callLlmJson<T>(params: {
   user: string;
   model?: string;
   temperature?: number;
+  apiKey?: string;
 }): Promise<T> {
-  const apiKey = getApiKey();
-  const baseUrl = getBaseUrl();
+  const apiKey = resolveApiKey(params.apiKey);
+  const baseUrl = getBaseUrl(apiKey);
   const model =
-    params.model ??
-    (baseUrl.includes("x.ai") ? "grok-3" : getModel());
+    params.model ?? (baseUrl.includes("x.ai") ? "grok-3" : getModel());
 
   const body = {
     model,

@@ -4,7 +4,7 @@ import {
   pickComponentsForDiagnostic,
 } from "@/lib/data/learning-components";
 import { diagnosticBandHint, isHighSchoolGrade } from "@/lib/grades";
-import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import type { DiagnosticQuestion, DiagnosticTest } from "@/lib/types/quiz";
 
 export const maxDuration = 60;
@@ -35,6 +35,7 @@ function fallbackQuestions(
 }
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       grade?: string;
@@ -152,4 +153,5 @@ Rules:
       { status: 500 },
     );
   }
+});
 }

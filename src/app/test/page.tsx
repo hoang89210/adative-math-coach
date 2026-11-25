@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { apiFetch } from "@/lib/client-api-key";
 import type { DiagnosticTest } from "@/lib/types/quiz";
 
 function readTest(): DiagnosticTest | null {
@@ -74,7 +75,7 @@ export default function TestPage() {
           answer,
         })),
       };
-      const res = await fetch("/api/diagnostic/grade", {
+      const res = await apiFetch("/api/diagnostic/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -82,7 +83,7 @@ export default function TestPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Grading failed");
 
-      const roadRes = await fetch("/api/roadmap", {
+      const roadRes = await apiFetch("/api/roadmap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: data.sessionId }),

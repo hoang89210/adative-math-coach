@@ -1,3 +1,4 @@
+import { withLlmRequestKey } from "@/lib/llm";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -5,6 +6,7 @@ import { listLabArtifacts } from "@/lib/lab/artifacts";
 import { evaluateGradeLevelLab } from "@/lib/lab/grade-level";
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       text?: string;
@@ -43,4 +45,5 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+});
 }

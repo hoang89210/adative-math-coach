@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ApiKeyPanel } from "@/components/ApiKeyPanel";
+import { apiFetch } from "@/lib/client-api-key";
 import type {
   CoachPriority,
   GradeResult,
@@ -182,7 +184,7 @@ export default function ResultsPage() {
     resetTransient();
     setPanel(null);
     try {
-      const res = await fetch("/api/practice/generate", {
+      const res = await apiFetch("/api/practice/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -212,7 +214,7 @@ export default function ResultsPage() {
     resetTransient();
     setPanel(null);
     try {
-      const res = await fetch("/api/study-sheet/generate", {
+      const res = await apiFetch("/api/study-sheet/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
@@ -238,7 +240,7 @@ export default function ResultsPage() {
     resetTransient();
     setPanel(null);
     try {
-      const res = await fetch("/api/cfu/generate", {
+      const res = await apiFetch("/api/cfu/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
@@ -261,7 +263,7 @@ export default function ResultsPage() {
     setLoadingKey(`cfu-int:${componentId}`);
     setError(null);
     try {
-      const res = await fetch("/api/cfu/interpret", {
+      const res = await apiFetch("/api/cfu/interpret", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -289,7 +291,7 @@ export default function ResultsPage() {
     resetTransient();
     setPanel(null);
     try {
-      const res = await fetch("/api/differentiate/generate", {
+      const res = await apiFetch("/api/differentiate/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, componentId: p.componentId }),
@@ -311,6 +313,7 @@ export default function ResultsPage() {
 
   return (
     <main className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-8 px-6 py-12">
+      <ApiKeyPanel compact />
       <div className="space-y-2">
         <p className="text-sm text-zinc-500">Grade {result.grade} results</p>
         <h1 className="text-3xl font-semibold text-zinc-900">

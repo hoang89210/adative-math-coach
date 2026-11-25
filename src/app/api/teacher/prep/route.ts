@@ -1,3 +1,4 @@
+import { withLlmRequestKey } from "@/lib/llm";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -16,6 +17,7 @@ import {
 } from "@/lib/skills/lesson-prep";
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       sessionId?: string;
@@ -95,4 +97,5 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+});
 }

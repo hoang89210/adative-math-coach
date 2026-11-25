@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
-import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import {
   cacheDifferentiation,
   cacheStudySheet,
@@ -95,6 +95,7 @@ No full lesson plan.`,
 }
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       sessionId?: string;
@@ -160,4 +161,5 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+});
 }

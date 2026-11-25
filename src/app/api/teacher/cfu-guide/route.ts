@@ -1,3 +1,4 @@
+import { withLlmRequestKey } from "@/lib/llm";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -14,6 +15,7 @@ import {
 } from "@/lib/session-skill";
 
 export async function GET(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const sessionId = await resolveSessionId(
       request.nextUrl.searchParams.get("sessionId") || "",
@@ -78,4 +80,5 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     );
   }
+});
 }

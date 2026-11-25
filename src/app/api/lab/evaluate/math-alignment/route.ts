@@ -1,3 +1,4 @@
+import { withLlmRequestKey } from "@/lib/llm";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -7,6 +8,7 @@ import { evaluateMathAlignmentLab } from "@/lib/lab/math-alignment";
 import { loadMastery, resolveSessionId } from "@/lib/mastery";
 
 export async function POST(request: NextRequest) {
+  return withLlmRequestKey(request, async () => {
   try {
     const body = (await request.json()) as {
       question?: string;
@@ -104,4 +106,5 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+});
 }

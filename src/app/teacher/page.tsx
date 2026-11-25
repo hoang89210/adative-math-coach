@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo, useState } from "react";
+import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { StandardCategoryPicker } from "@/components/StandardCategoryPicker";
+import { apiFetch } from "@/lib/client-api-key";
 import type { TeacherLesson, TeacherPrepState } from "@/lib/types/skills";
 
 type SkillRow = {
@@ -144,7 +146,7 @@ function TeacherPageInner() {
     setActionLoading("lesson");
     setError(null);
     try {
-      const res = await fetch("/api/teacher/lesson/generate", {
+      const res = await apiFetch("/api/teacher/lesson/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -171,7 +173,7 @@ function TeacherPageInner() {
     setError(null);
     try {
       if (!lesson) {
-        const lr = await fetch("/api/teacher/lesson/generate", {
+        const lr = await apiFetch("/api/teacher/lesson/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -183,7 +185,7 @@ function TeacherPageInner() {
         if (!lr.ok) throw new Error(lj.error || "Need lesson first");
         setLesson(lj.lesson);
       }
-      const res = await fetch("/api/teacher/prep", {
+      const res = await apiFetch("/api/teacher/prep", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -207,7 +209,7 @@ function TeacherPageInner() {
     setActionLoading("prep-turn");
     setError(null);
     try {
-      const res = await fetch("/api/teacher/prep", {
+      const res = await apiFetch("/api/teacher/prep", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -232,7 +234,7 @@ function TeacherPageInner() {
     if (!session || !focus) return;
     setActionLoading("prep-final");
     try {
-      const res = await fetch("/api/teacher/prep", {
+      const res = await apiFetch("/api/teacher/prep", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -261,7 +263,7 @@ function TeacherPageInner() {
         componentId: focus.componentId,
       });
       if (generateIfMissing) q.set("generate", "1");
-      const res = await fetch(`/api/teacher/cfu-guide?${q}`);
+      const res = await apiFetch(`/api/teacher/cfu-guide?${q}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "CFU guide failed");
       setCfuGuide(json.guide);
@@ -315,6 +317,7 @@ function TeacherPageInner() {
 
   return (
     <main className="mx-auto flex min-h-full w-full max-w-6xl flex-col gap-6 px-6 py-10">
+      <ApiKeyPanel compact />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">

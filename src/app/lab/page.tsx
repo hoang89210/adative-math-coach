@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
+import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { StandardCategoryPicker } from "@/components/StandardCategoryPicker";
+import { apiFetch } from "@/lib/client-api-key";
 import type {
   GradeLevelResult,
   LabArtifactOption,
@@ -118,7 +120,7 @@ function LabInner() {
               statement_code: statementCode,
               jurisdiction,
             };
-      const res = await fetch("/api/lab/evaluate/math-alignment", {
+      const res = await apiFetch("/api/lab/evaluate/math-alignment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -147,7 +149,7 @@ function LabInner() {
               text: text || undefined,
             }
           : { text, target_grade: targetGrade };
-      const res = await fetch("/api/lab/evaluate/grade-level", {
+      const res = await apiFetch("/api/lab/evaluate/grade-level", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -187,6 +189,8 @@ function LabInner() {
           </Link>
         </div>
       </div>
+
+      <ApiKeyPanel compact />
 
       <div className="flex flex-wrap gap-2">
         <button

@@ -19,9 +19,11 @@ npm run build:catalog   # if standards-catalog.json missing
 
 | Name | Required | Notes |
 |------|----------|--------|
-| `OPENAI_API_KEY` | yes | OpenAI key |
+| `OPENAI_API_KEY` | optional | Server fallback; users can paste their own key on the home page |
 | `LLM_MODEL` | no | default `gpt-4o-mini` |
 | `BLOB_READ_WRITE_TOKEN` | yes on prod | from Vercel Storage → Blob |
+
+Users can paste an OpenAI key in the yellow **API key** panel (stored in browser `localStorage` only, sent as `x-openai-api-key`).
 
 ## Deploy with CLI
 
