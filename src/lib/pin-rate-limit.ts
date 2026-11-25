@@ -1,19 +1,26 @@
-import { dbEnabled, dbQuery } from "@/lib/db/client";
+import { dbEnabled, dbQuery, noteDbTimeout } from "@/lib/db/client";
 import { logError } from "@/lib/log-safe";
 import {
+  PIN_CODE_MAX_FAILURES,
+  PIN_LOGIN_MAX_FAILURES,
   PIN_LOGIN_WINDOW_MS,
   type MemoryEntry,
   type PinRateLimitResult,
   clearMemoryFailures as clearMemory,
+  combineRateLimitResults,
   inspectMemoryRateLimit as inspectMemory,
+  pinLoginCodeRateKey,
+  pinLoginRateKey,
   recordMemoryFailure as recordMemory,
   toRateLimitResult,
 } from "@/lib/pin-rate-limit-core";
 
 export {
+  PIN_CODE_MAX_FAILURES,
   PIN_LOGIN_MAX_FAILURES,
   PIN_LOGIN_WINDOW_MS,
   getClientIp,
+  pinLoginCodeRateKey,
   pinLoginRateKey,
   type PinRateLimitResult,
 } from "@/lib/pin-rate-limit-core";
@@ -21,10 +28,17 @@ export {
 /**
  * Learner PIN login brute-force protection.
  *
- * Defaults: 5 failed attempts per IP+learner-code in a 15-minute window
- * (`PIN_LOGIN_MAX_FAILURES`, `PIN_LOGIN_WINDOW_MS`). After 5 failures, the
- * key stays locked for the rest of the window — a later correct PIN still
- * receives 429 (the login route checks the limiter before verifying the PIN).
+ * Two layers, same 15-minute window (`PIN_LOGIN_WINDOW_MS`):
+ *   - IP + learner code: 5 failures (`PIN_LOGIN_MAX_FAILURES`)
+ *   - learner code only (any IP): 10 failures (`PIN_CODE_MAX_FAILURES`)
+ * After either layer trips, a later correct PIN still receives 429 (the
+ * login route checks both layers before verifying the PIN).
+ *
+ * A successful login (when not already locked) clears both buckets so typo
+ * counts do not carry into the next session. During lockout we never reach
+ * a successful verify, so an attacker can still lock a learner's code for
+ * 15 minutes with 10 failures from rotating IPs — that is the tradeoff for
+ * stopping IP-rotation brute force (temporary, not permanent).
  *
  * Preferred store is Postgres (`amc_rate_limits`) so the limit is shared
  * across Vercel serverless isolates. If the DB is unavailable, we fall
@@ -99,6 +113,7 @@ async function ensureRateLimitTable(): Promise<boolean> {
       tableReady = null;
       tableReadyOk = false;
       nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
+      noteDbTimeout(err);
       logError("amc_rate_limits ensure table failed", err);
       return false;
     }
@@ -111,19 +126,27 @@ const memoryStore = new Map<string, MemoryEntry>();
 export function inspectMemoryRateLimit(
   key: string,
   now = Date.now(),
+  maxFailures: number = PIN_LOGIN_MAX_FAILURES,
 ): PinRateLimitResult {
-  return inspectMemory(memoryStore, key, now);
+  return inspectMemory(memoryStore, key, now, maxFailures);
 }
 
-export function recordMemoryFailure(key: string, now = Date.now()) {
-  return recordMemory(memoryStore, key, now);
+export function recordMemoryFailure(
+  key: string,
+  now = Date.now(),
+  maxFailures: number = PIN_LOGIN_MAX_FAILURES,
+) {
+  return recordMemory(memoryStore, key, now, maxFailures);
 }
 
 export function clearMemoryFailures(key: string) {
   clearMemory(memoryStore, key);
 }
 
-async function dbCheck(key: string): Promise<PinRateLimitResult | null> {
+async function dbCheck(
+  key: string,
+  maxFailures: number,
+): Promise<PinRateLimitResult | null> {
   const ok = await ensureRateLimitTable();
   if (!ok) return null;
   try {
@@ -140,12 +163,13 @@ async function dbCheck(key: string): Promise<PinRateLimitResult | null> {
       "rateLimitCheck",
     );
     const row = rows[0];
-    if (!row) return toRateLimitResult(0, now, now);
+    if (!row) return toRateLimitResult(0, now, now, maxFailures);
     const start = new Date(row.window_started_at).getTime();
-    return toRateLimitResult(Number(row.fail_count) || 0, start, now);
+    return toRateLimitResult(Number(row.fail_count) || 0, start, now, maxFailures);
   } catch (err) {
     nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
-    logError("amc_rate_limits check failed", err);
+    noteDbTimeout(err);
+      logError("amc_rate_limits check failed", err);
     return null;
   }
 }
@@ -178,7 +202,8 @@ async function dbRecordFailure(key: string): Promise<boolean> {
     return true;
   } catch (err) {
     nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
-    logError("amc_rate_limits increment failed", err);
+    noteDbTimeout(err);
+      logError("amc_rate_limits increment failed", err);
     return false;
   }
 }
@@ -195,27 +220,62 @@ async function dbClear(key: string): Promise<boolean> {
     return true;
   } catch (err) {
     nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
-    logError("amc_rate_limits clear failed", err);
+    noteDbTimeout(err);
+      logError("amc_rate_limits clear failed", err);
     return false;
   }
 }
 
+async function checkOne(
+  key: string,
+  maxFailures: number,
+): Promise<PinRateLimitResult> {
+  const fromDb = await dbCheck(key, maxFailures);
+  if (fromDb) return fromDb;
+  return inspectMemoryRateLimit(key, Date.now(), maxFailures);
+}
+
+export async function checkPinLoginLimits(
+  ip: string,
+  code: string,
+): Promise<PinRateLimitResult> {
+  const ipKey = pinLoginRateKey(ip, code);
+  const codeKey = pinLoginCodeRateKey(code);
+  const [ipLimit, codeLimit] = await Promise.all([
+    checkOne(ipKey, PIN_LOGIN_MAX_FAILURES),
+    checkOne(codeKey, PIN_CODE_MAX_FAILURES),
+  ]);
+  return combineRateLimitResults(ipLimit, codeLimit);
+}
+
+/** @deprecated use checkPinLoginLimits */
 export async function checkPinLoginRateLimit(
   key: string,
+  maxFailures: number = PIN_LOGIN_MAX_FAILURES,
 ): Promise<PinRateLimitResult> {
-  const fromDb = await dbCheck(key);
-  if (fromDb) return fromDb;
-  return inspectMemoryRateLimit(key);
+  return checkOne(key, maxFailures);
 }
 
-export async function recordPinLoginFailure(key: string): Promise<void> {
-  await dbRecordFailure(key);
+export async function recordPinLoginFailure(
+  ip: string,
+  code: string,
+): Promise<void> {
+  const ipKey = pinLoginRateKey(ip, code);
+  const codeKey = pinLoginCodeRateKey(code);
+  await Promise.all([dbRecordFailure(ipKey), dbRecordFailure(codeKey)]);
   // Always update memory so a subsequent request on this isolate still
   // sees the failure if the DB write was skipped or lagged.
-  recordMemoryFailure(key);
+  recordMemoryFailure(ipKey, Date.now(), PIN_LOGIN_MAX_FAILURES);
+  recordMemoryFailure(codeKey, Date.now(), PIN_CODE_MAX_FAILURES);
 }
 
-export async function clearPinLoginFailures(key: string): Promise<void> {
-  await dbClear(key);
-  clearMemoryFailures(key);
+export async function clearPinLoginFailures(
+  ip: string,
+  code: string,
+): Promise<void> {
+  const ipKey = pinLoginRateKey(ip, code);
+  const codeKey = pinLoginCodeRateKey(code);
+  await Promise.all([dbClear(ipKey), dbClear(codeKey)]);
+  clearMemoryFailures(ipKey);
+  clearMemoryFailures(codeKey);
 }

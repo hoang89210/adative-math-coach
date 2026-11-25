@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  PIN_CODE_MAX_FAILURES,
   PIN_LOGIN_MAX_FAILURES,
   PIN_LOGIN_WINDOW_MS,
   clearMemoryFailures,
+  decidePinLogin,
   getClientIp,
   inspectMemoryRateLimit,
+  pinLoginCodeRateKey,
   pinLoginRateKey,
   recordMemoryFailure,
   toRateLimitResult,
@@ -16,32 +19,13 @@ function requestWith(headers: Record<string, string>) {
   return new Request("https://example.test/api/learners", { headers });
 }
 
-/**
- * Mirrors POST /api/learners action=login: check the limiter *before*
- * verifying the PIN, and only clear the bucket after a successful verify.
- */
-function loginDecision(
-  store: Map<string, MemoryEntry>,
-  key: string,
-  now: number,
-  pinIsCorrect: boolean,
-): "ok" | "401" | "429" {
-  const limit = inspectMemoryRateLimit(store, key, now);
-  if (limit.limited) return "429";
-  if (!pinIsCorrect) {
-    const after = recordMemoryFailure(store, key, now);
-    return after.limited ? "429" : "401";
-  }
-  clearMemoryFailures(store, key);
-  return "ok";
-}
-
 describe("pinLoginRateKey / getClientIp", () => {
   it("normalizes IP and learner code", () => {
     assert.equal(
       pinLoginRateKey("::ffff:1.2.3.4", "  ab12cd "),
       "pin-login:1.2.3.4:AB12CD",
     );
+    assert.equal(pinLoginCodeRateKey("  ab12cd "), "pin-login-code:AB12CD");
   });
 
   it("prefers x-vercel-forwarded-for over x-real-ip and a spoofed XFF first hop", () => {
@@ -89,13 +73,58 @@ describe("memory / window limiter", () => {
     const store = new Map<string, MemoryEntry>();
     const now = 1_700_000_000_000;
     for (let i = 0; i < PIN_LOGIN_MAX_FAILURES; i++) {
-      assert.equal(loginDecision(store, "k", now, false) !== "ok", true);
+      assert.notEqual(decidePinLogin(store, "1.1.1.1", "AB12", now, false).status, "ok");
     }
-    assert.equal(inspectMemoryRateLimit(store, "k", now).limited, true);
-    assert.equal(loginDecision(store, "k", now + 1_000, true), "429");
-    assert.equal(inspectMemoryRateLimit(store, "k", now + 1_000).limited, true);
-    assert.equal(loginDecision(store, "k", now + PIN_LOGIN_WINDOW_MS - 1, true), "429");
-    assert.equal(loginDecision(store, "k", now + PIN_LOGIN_WINDOW_MS, true), "ok");
+    assert.equal(decidePinLogin(store, "1.1.1.1", "AB12", now + 1_000, true).status, "429");
+    assert.equal(
+      decidePinLogin(store, "1.1.1.1", "AB12", now + PIN_LOGIN_WINDOW_MS - 1, true).status,
+      "429",
+    );
+    assert.equal(
+      decidePinLogin(store, "1.1.1.1", "AB12", now + PIN_LOGIN_WINDOW_MS, true).status,
+      "ok",
+    );
+  });
+
+  it("IP+code layer still locks after 5 failures from the same IP (under the per-code cap)", () => {
+    const store = new Map<string, MemoryEntry>();
+    const now = 1_700_000_000_000;
+    let last = { status: "401" as const, retryAfterSec: 0 };
+    for (let i = 0; i < PIN_LOGIN_MAX_FAILURES; i++) {
+      last = decidePinLogin(store, "10.0.0.1", "AB12", now, false);
+    }
+    assert.equal(last.status, "429");
+    assert.ok(last.retryAfterSec > 0);
+    // Same IP is locked even though the code layer has only 5 (< 10) failures.
+    assert.equal(decidePinLogin(store, "10.0.0.1", "AB12", now, true).status, "429");
+    // A different IP can still try until the per-code layer fills.
+    assert.equal(decidePinLogin(store, "10.0.0.2", "AB12", now, false).status, "401");
+  });
+
+  it("locks a learner code after 10 failures from changing IPs", () => {
+    const store = new Map<string, MemoryEntry>();
+    const now = 1_700_000_000_000;
+    let last = { status: "401" as const, retryAfterSec: 0 };
+    for (let i = 0; i < PIN_CODE_MAX_FAILURES; i++) {
+      last = decidePinLogin(store, `203.0.113.${i + 1}`, "AB12", now, false);
+    }
+    assert.equal(last.status, "429");
+    // A new IP is still locked by the per-code layer.
+    assert.equal(decidePinLogin(store, "198.51.100.9", "AB12", now, false).status, "429");
+    // Correct PIN during the per-code lock also 429s and does not clear.
+    const correct = decidePinLogin(store, "198.51.100.9", "AB12", now + 1_000, true);
+    assert.equal(correct.status, "429");
+    assert.ok(correct.retryAfterSec > 0);
+    assert.equal(
+      decidePinLogin(store, "198.51.100.9", "AB12", now + PIN_LOGIN_WINDOW_MS - 1, true)
+        .status,
+      "429",
+    );
+    assert.equal(
+      decidePinLogin(store, "198.51.100.9", "AB12", now + PIN_LOGIN_WINDOW_MS, true)
+        .status,
+      "ok",
+    );
   });
 
   it("resets after the window and after a clear", () => {

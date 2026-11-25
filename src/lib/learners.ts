@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { get, list, put } from "@vercel/blob";
 import type { CoverageReport } from "./analytics/coverage";
-import { dbEnabled, dbQuery } from "./db/client";
+import { dbEnabled, dbQuery, isDbTimeoutError } from "./db/client";
 import { logError } from "./log-safe";
 
 import type { GradeResult } from "./types/quiz";
@@ -193,6 +193,7 @@ async function loadById(id: string): Promise<LearnerProfile | null> {
       if (p) cacheProfile(p);
       return p;
     } catch (err) {
+      if (isDbTimeoutError(err)) throw err;
       logError("pg learner load failed", err);
       return null;
     }
@@ -237,7 +238,8 @@ export async function findLearnerByCode(
       const p = await pgLoadByCode(key);
       if (p) cacheProfile(p);
       return p;
-    } catch {
+    } catch (err) {
+      if (isDbTimeoutError(err)) throw err;
       return null;
     }
   }

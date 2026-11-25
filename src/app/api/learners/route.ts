@@ -5,12 +5,12 @@ import {
   publicLearnerView,
   verifyLearnerPin,
 } from "@/lib/learners";
+import { isDbTimeoutError } from "@/lib/db/client";
 import { sanitizeDbError } from "@/lib/sanitize-error";
 import {
-  checkPinLoginRateLimit,
+  checkPinLoginLimits,
   clearPinLoginFailures,
   getClientIp,
-  pinLoginRateKey,
   recordPinLoginFailure,
 } from "@/lib/pin-rate-limit";
 
@@ -51,16 +51,16 @@ export async function POST(request: NextRequest) {
 
     if (action === "login") {
       const code = String(body.code ?? "");
-      const key = pinLoginRateKey(getClientIp(request), code);
-      const limit = await checkPinLoginRateLimit(key);
+      const ip = getClientIp(request);
+      const limit = await checkPinLoginLimits(ip, code);
       if (limit.limited) {
         return rateLimitResponse(limit.retryAfterSec);
       }
 
       const profile = await verifyLearnerPin(code, String(body.pin ?? ""));
       if (!profile) {
-        await recordPinLoginFailure(key);
-        const after = await checkPinLoginRateLimit(key);
+        await recordPinLoginFailure(ip, code);
+        const after = await checkPinLoginLimits(ip, code);
         if (after.limited) {
           return rateLimitResponse(after.retryAfterSec);
         }
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
           { status: 401 },
         );
       }
-      await clearPinLoginFailures(key);
+      await clearPinLoginFailures(ip, code);
       return NextResponse.json({
         learnerId: profile.id,
         publicCode: profile.publicCode,
@@ -90,9 +90,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
+    const status = isDbTimeoutError(err) ? 503 : 500;
     return NextResponse.json(
       { error: sanitizeDbError(err) || "Request failed" },
-      { status: 500 },
+      { status },
     );
   }
 }
