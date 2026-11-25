@@ -5,6 +5,7 @@ import {
   publicLearnerView,
   verifyLearnerPin,
 } from "@/lib/learners";
+import { sanitizeDbError } from "@/lib/sanitize-error";
 import {
   checkPinLoginRateLimit,
   clearPinLoginFailures,
@@ -90,7 +91,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
+      { error: sanitizeDbError(err) || "Request failed" },
       { status: 500 },
     );
   }

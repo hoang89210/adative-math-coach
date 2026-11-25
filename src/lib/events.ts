@@ -1,5 +1,5 @@
 import { dbEnabled, dbQuery } from "@/lib/db/client";
-import { scrubMeta } from "@/lib/log-safe";
+import { logError, scrubMeta } from "@/lib/log-safe";
 
 export type AmcEvent = {
   kind: string;
@@ -30,6 +30,6 @@ export async function logEvent(event: AmcEvent) {
       ],
     );
   } catch (err) {
-    console.error("amc_events insert failed", err instanceof Error ? err.message : err);
+    logError("amc_events insert failed", err);
   }
 }

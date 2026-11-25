@@ -26,14 +26,26 @@ export function pinLoginRateKey(ip: string, learnerCode: string) {
   return `pin-login:${normalizeIp(ip)}:${normalizeLearnerCode(learnerCode)}`;
 }
 
+/**
+ * Client IP for rate limiting. Prefer platform-trusted headers:
+ * `x-vercel-forwarded-for`, then `x-real-ip`. Fall back to the *last*
+ * hop of `x-forwarded-for` (the address the proxy actually saw). The first
+ * XFF hop is client-controlled and must not be trusted.
+ */
 export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) return normalizeIp(first);
+  const vercel = request.headers.get("x-vercel-forwarded-for");
+  if (vercel) {
+    const hop = vercel.split(",")[0]?.trim();
+    if (hop) return normalizeIp(hop);
   }
   const real = request.headers.get("x-real-ip")?.trim();
   if (real) return normalizeIp(real);
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const hops = forwarded.split(",").map((part) => part.trim()).filter(Boolean);
+    const last = hops[hops.length - 1];
+    if (last) return normalizeIp(last);
+  }
   return "unknown";
 }
 

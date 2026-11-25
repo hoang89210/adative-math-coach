@@ -1,4 +1,6 @@
 import { callLlmJson, hasLlmKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import type { StudySheet } from "@/lib/types/quiz";
 import type { TeacherLesson } from "@/lib/types/skills";
 
@@ -163,7 +165,7 @@ Return ONLY JSON:
       createdAt: new Date().toISOString(),
     };
   } catch (err) {
-    console.error("Teacher lesson LLM failed", err);
+    logError("Teacher lesson LLM failed", err);
     return base;
   }
 }

@@ -54,4 +54,12 @@ describe("sanitizeDbError", () => {
   it("falls back when the message is empty", () => {
     assert.equal(sanitizeDbError({}), "database check failed");
   });
+
+  it("redacts masked sk- key fragments in messages used for API 500s", () => {
+    const err = new Error("LLM API error 401: Incorrect API key provided: sk-TESTL****...A111");
+    const out = sanitizeDbError(err);
+    assert.doesNotMatch(out, /TESTL/);
+    assert.doesNotMatch(out, /A111/);
+    assert.match(out, /\[redacted\]/);
+  });
 });

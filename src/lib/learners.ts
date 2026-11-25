@@ -4,6 +4,8 @@ import path from "path";
 import { get, list, put } from "@vercel/blob";
 import type { CoverageReport } from "./analytics/coverage";
 import { dbEnabled, dbQuery } from "./db/client";
+import { logError } from "./log-safe";
+
 import type { GradeResult } from "./types/quiz";
 
 export type MasteryStatus = "unknown" | "emerging" | "mastered" | "stale";
@@ -191,7 +193,7 @@ async function loadById(id: string): Promise<LearnerProfile | null> {
       if (p) cacheProfile(p);
       return p;
     } catch (err) {
-      console.error("pg learner load failed", err);
+      logError("pg learner load failed", err);
       return null;
     }
   }

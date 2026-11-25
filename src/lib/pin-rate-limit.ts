@@ -1,4 +1,5 @@
 import { dbEnabled, dbQuery } from "@/lib/db/client";
+import { logError } from "@/lib/log-safe";
 import {
   PIN_LOGIN_WINDOW_MS,
   type MemoryEntry,
@@ -21,7 +22,9 @@ export {
  * Learner PIN login brute-force protection.
  *
  * Defaults: 5 failed attempts per IP+learner-code in a 15-minute window
- * (`PIN_LOGIN_MAX_FAILURES`, `PIN_LOGIN_WINDOW_MS`).
+ * (`PIN_LOGIN_MAX_FAILURES`, `PIN_LOGIN_WINDOW_MS`). After 5 failures, the
+ * key stays locked for the rest of the window — a later correct PIN still
+ * receives 429 (the login route checks the limiter before verifying the PIN).
  *
  * Preferred store is Postgres (`amc_rate_limits`) so the limit is shared
  * across Vercel serverless isolates. If the DB is unavailable, we fall
@@ -33,6 +36,11 @@ export {
  * backup until Postgres is reachable.
  */
 
+/** Short timeout so a hanging DB cannot stall login for the pool's 10s. */
+export const RATE_LIMIT_QUERY_TIMEOUT_MS = 1_500;
+/** After a failed ensure/query, skip the DB until this backoff elapses. */
+export const RATE_LIMIT_ENSURE_BACKOFF_MS = 30_000;
+
 const ENSURE_TABLE_SQL = `
 create table if not exists amc_rate_limits (
   rate_key text primary key,
@@ -43,21 +51,58 @@ create table if not exists amc_rate_limits (
 `;
 
 let tableReady: Promise<boolean> | null = null;
+let tableReadyOk = false;
+let nextEnsureAt = 0;
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Create the rate-limit table at most once per isolate. The promise is
+ * cached so concurrent logins share one attempt. Failures are cached with
+ * a backoff so a hanging / down DB is not retried on every request.
+ */
 async function ensureRateLimitTable(): Promise<boolean> {
   if (!dbEnabled()) return false;
-  if (!tableReady) {
-    tableReady = dbQuery(ENSURE_TABLE_SQL)
-      .then(() => true)
-      .catch((err) => {
-        tableReady = null;
-        console.error(
-          "amc_rate_limits ensure table failed",
-          err instanceof Error ? err.message : err,
-        );
-        return false;
-      });
-  }
+  if (tableReadyOk && tableReady) return tableReady;
+  if (tableReady) return tableReady;
+  if (Date.now() < nextEnsureAt) return false;
+
+  tableReady = (async () => {
+    try {
+      await withTimeout(
+        dbQuery(ENSURE_TABLE_SQL),
+        RATE_LIMIT_QUERY_TIMEOUT_MS,
+        "ensureRateLimitTable",
+      );
+      tableReadyOk = true;
+      return true;
+    } catch (err) {
+      tableReady = null;
+      tableReadyOk = false;
+      nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
+      logError("amc_rate_limits ensure table failed", err);
+      return false;
+    }
+  })();
   return tableReady;
 }
 
@@ -83,22 +128,24 @@ async function dbCheck(key: string): Promise<PinRateLimitResult | null> {
   if (!ok) return null;
   try {
     const now = Date.now();
-    const { rows } = await dbQuery<{
-      window_started_at: Date | string;
-      fail_count: number;
-    }>(
-      `select window_started_at, fail_count from amc_rate_limits where rate_key = $1`,
-      [key],
+    const { rows } = await withTimeout(
+      dbQuery<{
+        window_started_at: Date | string;
+        fail_count: number;
+      }>(
+        `select window_started_at, fail_count from amc_rate_limits where rate_key = $1`,
+        [key],
+      ),
+      RATE_LIMIT_QUERY_TIMEOUT_MS,
+      "rateLimitCheck",
     );
     const row = rows[0];
     if (!row) return toRateLimitResult(0, now, now);
     const start = new Date(row.window_started_at).getTime();
     return toRateLimitResult(Number(row.fail_count) || 0, start, now);
   } catch (err) {
-    console.error(
-      "amc_rate_limits check failed",
-      err instanceof Error ? err.message : err,
-    );
+    nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
+    logError("amc_rate_limits check failed", err);
     return null;
   }
 }
@@ -109,27 +156,29 @@ async function dbRecordFailure(key: string): Promise<boolean> {
   try {
     const now = new Date();
     const windowStartCutoff = new Date(now.getTime() - PIN_LOGIN_WINDOW_MS);
-    await dbQuery(
-      `insert into amc_rate_limits (rate_key, window_started_at, fail_count, updated_at)
-       values ($1, $2, 1, $2)
-       on conflict (rate_key) do update set
-         fail_count = case
-           when amc_rate_limits.window_started_at <= $3 then 1
-           else amc_rate_limits.fail_count + 1
-         end,
-         window_started_at = case
-           when amc_rate_limits.window_started_at <= $3 then $2
-           else amc_rate_limits.window_started_at
-         end,
-         updated_at = $2`,
-      [key, now, windowStartCutoff],
+    await withTimeout(
+      dbQuery(
+        `insert into amc_rate_limits (rate_key, window_started_at, fail_count, updated_at)
+         values ($1, $2, 1, $2)
+         on conflict (rate_key) do update set
+           fail_count = case
+             when amc_rate_limits.window_started_at <= $3 then 1
+             else amc_rate_limits.fail_count + 1
+           end,
+           window_started_at = case
+             when amc_rate_limits.window_started_at <= $3 then $2
+             else amc_rate_limits.window_started_at
+           end,
+           updated_at = $2`,
+        [key, now, windowStartCutoff],
+      ),
+      RATE_LIMIT_QUERY_TIMEOUT_MS,
+      "rateLimitIncrement",
     );
     return true;
   } catch (err) {
-    console.error(
-      "amc_rate_limits increment failed",
-      err instanceof Error ? err.message : err,
-    );
+    nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
+    logError("amc_rate_limits increment failed", err);
     return false;
   }
 }
@@ -138,13 +187,15 @@ async function dbClear(key: string): Promise<boolean> {
   const ok = await ensureRateLimitTable();
   if (!ok) return false;
   try {
-    await dbQuery(`delete from amc_rate_limits where rate_key = $1`, [key]);
+    await withTimeout(
+      dbQuery(`delete from amc_rate_limits where rate_key = $1`, [key]),
+      RATE_LIMIT_QUERY_TIMEOUT_MS,
+      "rateLimitClear",
+    );
     return true;
   } catch (err) {
-    console.error(
-      "amc_rate_limits clear failed",
-      err instanceof Error ? err.message : err,
-    );
+    nextEnsureAt = Date.now() + RATE_LIMIT_ENSURE_BACKOFF_MS;
+    logError("amc_rate_limits clear failed", err);
     return false;
   }
 }

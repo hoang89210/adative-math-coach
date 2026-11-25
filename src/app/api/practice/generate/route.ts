@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import { cacheQuiz, loadMastery } from "@/lib/mastery";
 import {
   resolvePriorityContext,
@@ -105,7 +107,7 @@ Rules:
 
         if (parsed.length >= 3) questions = parsed.slice(0, 5);
       } catch (err) {
-        console.error("Quiz LLM failed, using fallback", err);
+        logError("Quiz LLM failed, using fallback", err);
       }
     }
 

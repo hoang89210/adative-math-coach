@@ -6,6 +6,16 @@
 
 const REDACTED = "[redacted]";
 
+/**
+ * OpenAI-style secrets, including provider-masked forms such as
+ * `sk-TESTL****...A111` and `sk-proj-ABCD****...Z999`.
+ * Also matches full `sk-` / `sk-proj-` / `sk-svcacct-` keys.
+ * Dots and asterisks are part of the key token so a mask suffix cannot leak.
+ */
+const API_KEY_PATTERN = /\bsk-[A-Za-z0-9_\-*.]+/g;
+
+const URI_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s'"\\]+/gi;
+
 const SENSITIVE_HEADER =
   /^(x-openai-api-key|authorization|cookie|set-cookie|proxy-authorization|x-api-key)$/i;
 
@@ -16,10 +26,10 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_HEADER.test(key) || SENSITIVE_KEY.test(key);
 }
 
-function redactString(value: string): string {
+export function redactSecretString(value: string): string {
   return value
-    .replace(/\bsk-[A-Za-z0-9_-]+\b/g, REDACTED)
-    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"\\]+/gi, REDACTED);
+    .replace(API_KEY_PATTERN, REDACTED)
+    .replace(URI_PATTERN, REDACTED);
 }
 
 function entriesFromHeaders(
@@ -44,7 +54,34 @@ export function redactHeaders(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of entriesFromHeaders(headers)) {
-    out[key] = isSensitiveKey(key) ? REDACTED : redactString(String(value ?? ""));
+    out[key] = isSensitiveKey(key)
+      ? REDACTED
+      : redactSecretString(String(value ?? ""));
+  }
+  return out;
+}
+
+function isErrorLike(value: unknown): value is Error {
+  return (
+    value instanceof Error ||
+    Object.prototype.toString.call(value) === "[object Error]"
+  );
+}
+
+function redactError(err: Error, depth: number): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: err.name || "Error",
+    message: redactSecretString(err.message),
+  };
+  if (typeof err.stack === "string") {
+    out.stack = redactSecretString(err.stack);
+  }
+  if ("code" in err && (err as { code?: unknown }).code != null) {
+    out.code = (err as { code?: unknown }).code;
+  }
+  const cause = (err as Error & { cause?: unknown }).cause;
+  if (cause !== undefined) {
+    out.cause = redactForLog(cause, depth + 1);
   }
   return out;
 }
@@ -53,10 +90,13 @@ export function redactForLog(value: unknown, depth = 0): unknown {
   if (value == null || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
-  if (typeof value === "string") return redactString(value);
+  if (typeof value === "string") return redactSecretString(value);
   if (depth > 4) return REDACTED;
   if (typeof Headers !== "undefined" && value instanceof Headers) {
     return redactHeaders(value);
+  }
+  if (isErrorLike(value)) {
+    return redactError(value, depth);
   }
   if (Array.isArray(value)) return value.map((item) => redactForLog(item, depth + 1));
   if (typeof value === "object") {
@@ -83,13 +123,15 @@ export function scrubMeta(
 }
 
 /**
- * Safe console helpers — use these if logging request-adjacent data.
- * Never pass raw Headers / Request without going through redactHeaders.
+ * Safe console.error. Pass a message and/or an Error / log payload.
+ * Error.message, stack, and cause are redacted so masked `sk-` fragments
+ * cannot leak when someone logs the Error object directly.
  */
-export function logError(message: string, detail?: unknown) {
+export function logError(messageOrErr: unknown, detail?: unknown) {
+  const first = redactForLog(messageOrErr);
   if (detail === undefined) {
-    console.error(message);
+    console.error(first);
     return;
   }
-  console.error(message, redactForLog(detail));
+  console.error(first, redactForLog(detail));
 }

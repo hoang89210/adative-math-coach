@@ -7,6 +7,8 @@ import {
   priorityTier,
 } from "@/lib/data/progression";
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import { loadMastery, updateMasteryRoadmap } from "@/lib/mastery";
 import type { CoachPriority, Roadmap } from "@/lib/types/quiz";
 
@@ -270,7 +272,7 @@ Rules:
           };
         }
       } catch (err) {
-        console.error("LLM coach plan failed, using local", err);
+        logError("LLM coach plan failed, using local", err);
       }
     }
 

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { redactForLog, redactHeaders, scrubMeta } from "./log-safe.ts";
+import {
+  redactForLog,
+  redactHeaders,
+  redactSecretString,
+  scrubMeta,
+} from "./log-safe.ts";
 
 describe("redactHeaders", () => {
   it("redacts x-openai-api-key regardless of case", () => {
@@ -25,6 +30,27 @@ describe("redactHeaders", () => {
   });
 });
 
+describe("redactSecretString — masked and full sk- keys", () => {
+  it("redacts the exact OpenAI masked form sk-TESTL****...A111 so no prefix or suffix leaks", () => {
+    const input = "Incorrect API key provided: sk-TESTL****...A111";
+    const out = redactSecretString(input);
+    assert.equal(out, "Incorrect API key provided: [redacted]");
+    assert.doesNotMatch(out, /sk-/);
+    assert.doesNotMatch(out, /TESTL/);
+    assert.doesNotMatch(out, /\*{2,}/);
+    assert.doesNotMatch(out, /A111/);
+  });
+
+  it("redacts the sk-proj- masked variant the same way", () => {
+    const input = "Incorrect API key provided: sk-proj-ABCD****...Z999";
+    const out = redactSecretString(input);
+    assert.equal(out, "Incorrect API key provided: [redacted]");
+    assert.doesNotMatch(out, /sk-proj-/);
+    assert.doesNotMatch(out, /ABCD/);
+    assert.doesNotMatch(out, /Z999/);
+  });
+});
+
 describe("redactForLog / scrubMeta", () => {
   it("redacts nested header objects and sk- values", () => {
     const out = redactForLog({
@@ -34,6 +60,25 @@ describe("redactForLog / scrubMeta", () => {
     const headers = out.headers as Record<string, string>;
     assert.equal(headers["x-openai-api-key"], "[redacted]");
     assert.equal(out.message, "ok [redacted]");
+  });
+
+  it("redacts Error.message, stack, and cause for masked sk- and sk-proj- keys", () => {
+    const cause = new Error("Incorrect API key provided: sk-proj-ABCD****...Z999");
+    const err = new Error("Incorrect API key provided: sk-TESTL****...A111");
+    err.cause = cause;
+    const out = redactForLog(err) as Record<string, unknown>;
+    const blob = JSON.stringify(out);
+    assert.doesNotMatch(blob, /TESTL/);
+    assert.doesNotMatch(blob, /A111/);
+    assert.doesNotMatch(blob, /ABCD/);
+    assert.doesNotMatch(blob, /Z999/);
+    assert.doesNotMatch(blob, /sk-TESTL/);
+    assert.doesNotMatch(blob, /sk-proj-ABCD/);
+    assert.match(String(out.message), /\[redacted\]/);
+    assert.match(String(out.stack), /\[redacted\]/);
+    const caused = out.cause as Record<string, unknown>;
+    assert.match(String(caused.message), /\[redacted\]/);
+    assert.match(String(caused.stack), /\[redacted\]/);
   });
 
   it("drops sensitive keys from event meta", () => {

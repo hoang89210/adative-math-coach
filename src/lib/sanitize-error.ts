@@ -14,8 +14,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b(?:POSTGRES|DATABASE|SUPABASE)_[A-Z0-9_]*=\S+/gi,
   // query-string credential fragments if a URI was split
   /[?&](?:password|passwd|pwd|user|username|token|apikey|api[_-]?key|sslmode)=[^&\s]*/gi,
-  // OpenAI-style keys and similar tokens
-  /\bsk-[A-Za-z0-9_-]+\b/g,
+  // OpenAI-style keys, including masked forms like sk-TESTL****...A111
+  /\bsk-[A-Za-z0-9_\-*.]+/g,
   // user:pass@host (URI without scheme)
   /\b[^\s/@:]+:[^@\s]+@[^\s]+/g,
 ];

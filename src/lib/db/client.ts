@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import { buildPoolConfig } from "./pool-config";
 
 let pool: Pool | null = null;
 
@@ -22,9 +23,10 @@ export function getPool(): Pool {
     throw new Error("No DATABASE_URL / POSTGRES_URL configured");
   }
   if (!pool) {
+    const { connectionString, ssl } = buildPoolConfig(url);
     pool = new Pool({
-      connectionString: url,
-      ssl: url.includes("localhost") ? undefined : { rejectUnauthorized: false },
+      connectionString,
+      ssl,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
