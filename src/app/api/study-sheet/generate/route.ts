@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
+import { logError } from "@/lib/log-safe";
+
 import {
   cacheStudySheet,
   getCachedStudySheet,
@@ -143,7 +145,7 @@ Rules:
           sheet = parsed;
         }
       } catch (err) {
-        console.error("Study sheet LLM failed, using fallback", err);
+        logError("Study sheet LLM failed, using fallback", err);
       }
     }
 

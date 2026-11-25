@@ -5,6 +5,8 @@ import {
 } from "@/lib/data/learning-components";
 import { diagnosticBandHint, isHighSchoolGrade } from "@/lib/grades";
 import { logEvent } from "@/lib/events";
+import { logError } from "@/lib/log-safe";
+
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import type { DiagnosticQuestion, DiagnosticTest } from "@/lib/types/quiz";
 
@@ -118,7 +120,7 @@ Rules:
           })
           .filter((q) => q.question && q.correct_answer);
       } catch (err) {
-        console.error("Grok diagnostic failed, using fallback", err);
+        logError("Grok diagnostic failed, using fallback", err);
         questions = fallbackQuestions(
           grade,
           selected.map((c) => ({ id: c.id, description: c.description })),

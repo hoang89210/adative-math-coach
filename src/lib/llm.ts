@@ -1,3 +1,4 @@
+import { redactSecretString } from "./log-safe";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -11,6 +12,11 @@ type LlmContext = { apiKey?: string };
 
 const llmContext = new AsyncLocalStorage<LlmContext>();
 
+/**
+ * Read the optional per-request user key from `x-openai-api-key`.
+ * Never log this header, the raw Request/Headers object, or the returned value.
+ * If you must log request headers, pass them through `redactHeaders` in `@/lib/log-safe`.
+ */
 export function getRequestApiKey(request: Request): string | undefined {
   const raw =
     request.headers.get("x-openai-api-key")?.trim() ||
@@ -112,7 +118,10 @@ export async function callLlmJson<T>(params: {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`LLM API error ${res.status}: ${text.slice(0, 500)}`);
+    // Redact at the source: OpenAI error bodies often include a masked key
+    // like "sk-TESTL****...A111". Never put a raw key fragment in Error.message.
+    const safeBody = redactSecretString(text.slice(0, 500));
+    throw new Error(`LLM API error ${res.status}: ${safeBody}`);
   }
 
   const data = (await res.json()) as {

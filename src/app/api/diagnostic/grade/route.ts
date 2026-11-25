@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import { computeCoverage } from "@/lib/analytics/coverage";
 import { getComponentsByIds } from "@/lib/data/learning-components";
 import { logEvent } from "@/lib/events";
+import { logError } from "@/lib/log-safe";
+
 import { mergeDiagnosticIntoLearner } from "@/lib/learners";
 import { saveMastery } from "@/lib/mastery";
 import type {
@@ -161,7 +163,7 @@ export async function POST(request: NextRequest) {
           coverage,
         });
       } catch (err) {
-        console.error("learner merge failed", err);
+        logError("learner merge failed", err);
       }
     }
 
