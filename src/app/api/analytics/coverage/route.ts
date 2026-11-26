@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse } from "@/lib/api-errors";
 import { loadMastery, resolveSessionId } from "@/lib/mastery";
 
 export async function GET(request: NextRequest) {
@@ -23,9 +24,6 @@ export async function GET(request: NextRequest) {
       percent: session.result.percent,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 }

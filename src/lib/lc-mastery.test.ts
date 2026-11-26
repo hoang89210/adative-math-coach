@@ -132,14 +132,15 @@ describe("pooling + heatmap", () => {
     assert.deepEqual(poolPosteriors([]), prior());
   });
 
-  test("pickPrimaryStandard prefers jurisdiction, then Multi-State", () => {
+  test("pickPrimaryStandard prefers Multi-State (CCSS), then jurisdiction", () => {
     const stds = [
       { id: "1", code: null, description: "x", jurisdiction: "Ohio" },
       { id: "2", code: "4.NF.1", description: "x", jurisdiction: "Multi-State" },
       { id: "3", code: "4.NF.A.1", description: "x", jurisdiction: "Texas" },
     ];
-    assert.equal(pickPrimaryStandard(stds, "Texas")?.id, "3");
+    assert.equal(pickPrimaryStandard(stds, "Texas")?.id, "2");
     assert.equal(pickPrimaryStandard(stds, "Ohio")?.id, "2");
+    assert.equal(pickPrimaryStandard([stds[0], stds[2]], "Texas")?.id, "3");
     assert.equal(pickPrimaryStandard(stds)?.id, "2");
     assert.equal(pickPrimaryStandard([]), null);
   });

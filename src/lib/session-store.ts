@@ -1,11 +1,15 @@
 import { get, list, put } from "@vercel/blob";
 import fs from "fs";
 import path from "path";
-import { dbEnabled, dbQuery } from "@/lib/db/client";
+import { dbEnabled, dbQuery, isDbTimeoutError } from "@/lib/db/client";
 import { logError } from "@/lib/log-safe";
 
 import type { MasteryRecord } from "./mastery-types";
-import { sessionShortCode } from "./mastery-codes";
+import {
+  isSessionUuid,
+  isValidSessionRef,
+  sessionShortCode,
+} from "./mastery-codes";
 
 const memory = new Map<string, MasteryRecord>();
 
@@ -116,7 +120,13 @@ export async function storeSave(record: MasteryRecord): Promise<MasteryRecord> {
   memory.set(record.id, record);
 
   if (dbEnabled()) {
-    await pgSave(record);
+    try {
+      await pgSave(record);
+    } catch (err) {
+      // do not leave an unsaved session in the per-instance cache
+      memory.delete(record.id);
+      throw err;
+    }
     return record;
   }
 
@@ -151,7 +161,14 @@ export async function storeSave(record: MasteryRecord): Promise<MasteryRecord> {
   return record;
 }
 
+/**
+ * Load a session by id. Returns null for "not found" (including ids that are
+ * not UUIDs — no DB round-trip, no path traversal). THROWS when the DB is
+ * unavailable / timing out so routes can answer 503 + Retry-After instead of
+ * a misleading 404.
+ */
 export async function storeLoad(id: string): Promise<MasteryRecord | null> {
+  if (!isSessionUuid(String(id ?? ""))) return null;
   const cached = memory.get(id);
   if (cached) return cached;
 
@@ -161,6 +178,7 @@ export async function storeLoad(id: string): Promise<MasteryRecord | null> {
       if (rec) memory.set(id, rec);
       return rec;
     } catch (err) {
+      if (isDbTimeoutError(err)) throw err;
       logError("pg session load failed", err);
       return null;
     }
@@ -218,9 +236,9 @@ export async function storeResolveSessionId(
   input: string,
 ): Promise<string | null> {
   const raw = String(input ?? "").trim();
-  if (!raw) return null;
+  if (!isValidSessionRef(raw)) return null;
 
-  if (await storeLoad(raw)) return raw;
+  if (isSessionUuid(raw) && (await storeLoad(raw))) return raw;
 
   const compact = raw.replace(/-/g, "").toLowerCase();
   if (compact.length >= 32) {
@@ -240,7 +258,9 @@ export async function storeResolveSessionId(
   if (dbEnabled()) {
     try {
       return await pgResolveByPrefix(prefix);
-    } catch {
+    } catch (err) {
+      if (isDbTimeoutError(err)) throw err;
+      logError("pg session prefix lookup failed", err);
       return null;
     }
   }

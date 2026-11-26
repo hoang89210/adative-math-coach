@@ -227,6 +227,19 @@ async function loadById(id: string): Promise<LearnerProfile | null> {
   }
 }
 
+/**
+ * Load a learner by id. Returns null when not found; throws on DB timeout /
+ * unavailability so callers can answer 503 instead of "not found".
+ */
+export async function loadLearnerById(
+  id: string,
+): Promise<LearnerProfile | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return null;
+  }
+  return loadById(id);
+}
+
 export async function findLearnerByCode(
   code: string,
 ): Promise<LearnerProfile | null> {

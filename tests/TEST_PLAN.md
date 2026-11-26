@@ -68,6 +68,15 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
   - `GET /api/health` → `ok: false`, `okContent: true`, `okDb: false`, `dbError` không chứa URI/password.
   - `POST /api/learners` login → **503** + `Retry-After` (và request tiếp theo trong `DB_FAIL_BACKOFF_MS` fail-fast ngay với **503** + `Retry-After`).
 
+### (c2) DB down / input validation (`PR #4`, QA round 1)
+- Chọn **503 + `Retry-After`** thống nhất khi DB không kết nối được / treo (giống learner create/login):
+  - `POST /api/diagnostic/grade` → **503** + `Retry-After` (session không lưu được nên không trả 200 giả).
+  - `POST /api/mastery {code}` và `GET /api/teacher/session?code=` → **503** + `Retry-After` (không còn 404 "session not found" giả).
+  - Mọi route dùng `errorResponse()` (roadmap, study-sheet, cfu, journey, teacher/*…) cũng trả 503 khi DB timeout.
+- Code không đúng định dạng (vd `ZZZZZZZZ`, không phải hex ≥ 8 ký tự / UUID) → **400** "session not found — invalid code format…" ngay, **không** query DB.
+- JSON hỏng → **400** `{"error":"Invalid JSON body"}` (không lộ message parser); body > giới hạn → **413** (grade 128 KB, mastery 8 KB, khác 256 KB).
+- Grade: `learnerId` phải là UUID **và tồn tại** (không thì 400/404); ≤ 30 câu, ≤ 4 LC/câu, LC id lạ bị bỏ (trả `lcIdsDropped`), ≤ 16 LC khác nhau/lần chấm.
+
 ### (d) Diagnostic Submit → `amc_sessions` & Teacher session code (`RUN_E2E=1`)
 - Grade 4 diagnostic trên `/` → trả lời 7 câu trên `/test` → Submit → `/results` hiện `Code XXXXXXXX` → `GET /api/teacher/session?sessionId=<code>` trả 200 → mở `/teacher` bằng code khớp snapshot.
 - Kiểm tra DB gold-standard (khi chạy có Supabase):

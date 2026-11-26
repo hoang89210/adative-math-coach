@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { HttpError, errorResponse, readJsonBody } from "@/lib/api-errors";
+import { sanitizeDbError } from "@/lib/sanitize-error";
 import {
   getLearningComponentsByGrade,
   pickComponentsForDiagnostic,
@@ -40,7 +42,7 @@ function fallbackQuestions(
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       grade?: string;
       jurisdiction?: string;
     };
@@ -157,9 +159,14 @@ Rules:
     });
     return NextResponse.json({ ...test, jurisdiction });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await logEvent({ kind: "diagnostic_generate", ok: false, message });
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (!(err instanceof HttpError)) {
+      await logEvent({
+        kind: "diagnostic_generate",
+        ok: false,
+        message: sanitizeDbError(err),
+      });
+    }
+    return errorResponse(err);
   }
   });
 }

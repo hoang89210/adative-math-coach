@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 
 export const maxDuration = 60;
 import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
@@ -52,7 +53,7 @@ function fallbackSheet(skill: string, grade: string): StudySheet {
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       componentId?: string;
       refresh?: boolean;
@@ -158,10 +159,7 @@ Rules:
       cached: false,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

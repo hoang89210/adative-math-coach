@@ -35,6 +35,7 @@ export type LcMasteryReport = {
 export function buildLcMasteryReport(
   posteriors: Map<string, BetaParams>,
   jurisdiction?: string,
+  grade?: string,
 ): LcMasteryReport {
   const idx = getStandardIndex();
   const lcMeta = [...posteriors.keys()].map((id) => {
@@ -47,13 +48,14 @@ export function buildLcMasteryReport(
         code: s.code,
         description: s.description,
         jurisdiction: s.jurisdiction,
+        gradeLevel: s.gradeLevel,
       })),
     };
   });
   const prog = loadProgression();
   return {
-    heatmap: buildHeatmap({ posteriors, lcMeta, jurisdiction }),
-    rootGaps: analyzeRootGaps({ posteriors, jurisdiction, maxReports: 3 }),
+    heatmap: buildHeatmap({ posteriors, lcMeta, jurisdiction, grade }),
+    rootGaps: analyzeRootGaps({ posteriors, jurisdiction, grade, maxReports: 3 }),
     lcCount: posteriors.size,
     thresholds: {
       masteredMinMean: MASTERED_MIN_MEAN,

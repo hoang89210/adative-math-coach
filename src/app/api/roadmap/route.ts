@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 
 export const maxDuration = 60;
 import { getComponentsByIds } from "@/lib/data/learning-components";
@@ -22,7 +23,7 @@ import type { CoachPriority, FoundationStep, Roadmap } from "@/lib/types/quiz";
  */
 async function withFoundations(
   roadmap: Roadmap,
-  session: { learnerId?: string; jurisdiction?: string; result: { byComponent: Array<{ componentId: string; correct: number; total: number }> } },
+  session: { learnerId?: string; jurisdiction?: string; grade?: string; result: { byComponent: Array<{ componentId: string; correct: number; total: number }> } },
 ): Promise<Roadmap> {
   try {
     let posteriors = new Map<string, BetaParams>();
@@ -35,6 +36,7 @@ async function withFoundations(
     const reports = analyzeRootGaps({
       posteriors,
       jurisdiction: session.jurisdiction,
+      grade: session.grade,
       maxReports: 2,
     });
     if (!reports.length) return { ...roadmap, foundations: [] };
@@ -181,7 +183,7 @@ function buildLocalCoachPlan(input: {
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       refresh?: boolean;
     };
@@ -358,10 +360,7 @@ Rules:
     await updateMasteryRoadmap(sessionId, roadmap);
     return NextResponse.json({ sessionId, roadmap });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

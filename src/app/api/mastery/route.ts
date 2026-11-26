@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { dbFailFastResponseInit, isDbTimeoutError } from "@/lib/db/client";
+import { HttpError, errorResponse, readJsonBody } from "@/lib/api-errors";
+import { loadLearnerById } from "@/lib/learners";
 import { posteriorsFromTallies, type BetaParams } from "@/lib/lc-mastery";
 import { buildLcMasteryReport } from "@/lib/lc-mastery-report";
 import { isValidLearnerId, loadLcMastery } from "@/lib/lc-mastery-store";
 import { logError } from "@/lib/log-safe";
-import { loadMastery, resolveSessionId } from "@/lib/mastery";
-import { sanitizeDbError } from "@/lib/sanitize-error";
+import { isValidSessionRef, loadMastery, resolveSessionId } from "@/lib/mastery";
 
 export const maxDuration = 30;
 
@@ -21,7 +21,7 @@ export const maxDuration = 30;
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json().catch(() => ({}))) as {
+    const body = (await readJsonBody(request, 8 * 1024)) as {
       learnerId?: unknown;
       sessionId?: unknown;
       code?: unknown;
@@ -34,25 +34,43 @@ export async function POST(request: NextRequest) {
     let mode: "learner" | "session" = "learner";
     let store: "db" | "memory" | "session" = "session";
     let sessionId: string | null = null;
+    let grade: string | undefined;
 
     if (body.learnerId !== undefined && body.learnerId !== null && body.learnerId !== "") {
       if (!isValidLearnerId(body.learnerId)) {
         return NextResponse.json({ error: "invalid learnerId" }, { status: 400 });
       }
-      const loaded = await loadLcMastery(body.learnerId.trim());
+      const learnerId = body.learnerId.trim();
+      const loaded = await loadLcMastery(learnerId);
       posteriors = loaded.posteriors;
       store = loaded.source;
+      // grade / jurisdiction steer the primary-standard choice; best effort
+      try {
+        const learner = await loadLearnerById(learnerId);
+        grade = learner?.currentGrade;
+        jurisdiction = jurisdiction || learner?.jurisdiction;
+      } catch (err) {
+        logError("mastery: learner profile load failed", err);
+      }
     } else {
       const raw = String(body.sessionId ?? body.code ?? "").trim().slice(0, 64);
       if (!raw) {
         return NextResponse.json({ error: "learnerId, sessionId or code is required" }, { status: 400 });
       }
+      if (!isValidSessionRef(raw)) {
+        return NextResponse.json(
+          { error: "session not found — invalid code format (use the 8-character code or full session id)" },
+          { status: 400 },
+        );
+      }
+      // DB unavailable -> throws -> 503 + Retry-After (not a fake 404)
       sessionId = await resolveSessionId(raw);
       const session = sessionId ? await loadMastery(sessionId) : null;
       if (!session) {
         return NextResponse.json({ error: "session not found" }, { status: 404 });
       }
       jurisdiction = jurisdiction || session.jurisdiction;
+      grade = session.grade;
       if (session.learnerId && isValidLearnerId(session.learnerId)) {
         const loaded = await loadLcMastery(session.learnerId);
         posteriors = loaded.posteriors;
@@ -66,7 +84,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const report = buildLcMasteryReport(posteriors, jurisdiction);
+    const report = buildLcMasteryReport(posteriors, jurisdiction, grade);
     return NextResponse.json({
       mode,
       store,
@@ -75,13 +93,7 @@ export async function POST(request: NextRequest) {
       ...report,
     });
   } catch (err) {
-    if (isDbTimeoutError(err)) {
-      return NextResponse.json(
-        { error: sanitizeDbError(err) || "Database temporarily unavailable" },
-        dbFailFastResponseInit(),
-      );
-    }
-    logError("mastery report failed", err);
-    return NextResponse.json({ error: "Mastery report failed" }, { status: 500 });
+    if (!(err instanceof HttpError)) logError("mastery report failed", err);
+    return errorResponse(err, { fallbackMessage: "Mastery report failed" });
   }
 }

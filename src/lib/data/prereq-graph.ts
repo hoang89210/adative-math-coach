@@ -160,9 +160,10 @@ export type RootGapReport = {
 export function analyzeRootGaps(params: {
   posteriors: Map<string, BetaParams>;
   jurisdiction?: string;
+  grade?: string;
   maxReports?: number;
 }): RootGapReport[] {
-  const { posteriors, jurisdiction } = params;
+  const { posteriors, jurisdiction, grade } = params;
   const idx = getStandardIndex();
   const targets = new Map<string, string | undefined>();
 
@@ -170,10 +171,7 @@ export function analyzeRootGaps(params: {
   for (const [lcId, p] of posteriors) {
     const comp = idx.components.get(lcId);
     if (!comp) continue;
-    const primary = pickPrimaryStandard(
-      comp.relatedStandards.map((s) => ({ ...s, jurisdiction: s.jurisdiction })),
-      jurisdiction,
-    );
+    const primary = pickPrimaryStandard(comp.relatedStandards, jurisdiction, grade);
     if (!primary) continue;
     touchedStandards.add(primary.id);
     if (summarize(p).state === "gap" && !targets.has(primary.id)) {

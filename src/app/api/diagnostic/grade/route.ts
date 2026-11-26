@@ -1,16 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
+import { HttpError, errorResponse, readJsonBody } from "@/lib/api-errors";
 import { randomUUID } from "crypto";
 import { computeCoverage } from "@/lib/analytics/coverage";
-import { getComponentsByIds } from "@/lib/data/learning-components";
+import {
+  getComponentsByIds,
+  getStandardIndex,
+} from "@/lib/data/learning-components";
 import { logEvent } from "@/lib/events";
+import {
+  GRADE_MAX_BODY_BYTES,
+  filterEvidenceLcIds,
+  validateGradeBody,
+} from "@/lib/grade-input";
 import { logError } from "@/lib/log-safe";
+import { sanitizeDbError } from "@/lib/sanitize-error";
 
-import { mergeDiagnosticIntoLearner } from "@/lib/learners";
+import { loadLearnerById, mergeDiagnosticIntoLearner } from "@/lib/learners";
 import { deltasFromObservations, type ItemObservation } from "@/lib/lc-mastery";
-import { isValidLearnerId, recordLcEvidence } from "@/lib/lc-mastery-store";
+import { recordLcEvidence } from "@/lib/lc-mastery-store";
 import { saveMastery } from "@/lib/mastery";
 import type {
-  AnswerSubmission,
   ComponentResult,
   DiagnosticQuestion,
   GradeResult,
@@ -47,29 +56,19 @@ function isCorrect(question: DiagnosticQuestion, answer: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as {
-      grade?: string;
-      jurisdiction?: string;
-      learnerId?: string;
-      questions?: DiagnosticQuestion[];
-      answers?: AnswerSubmission[];
-      components?: Array<{ id: string; description: string }>;
-    };
+    const input = validateGradeBody(
+      await readJsonBody(request, GRADE_MAX_BODY_BYTES),
+    );
+    const { grade, jurisdiction, learnerId, questions, answers, components } =
+      input;
 
-    const grade = String(body.grade ?? "").trim();
-    const jurisdiction = body.jurisdiction
-      ? String(body.jurisdiction).trim()
-      : undefined;
-    const learnerId = body.learnerId ? String(body.learnerId).trim() : undefined;
-    const questions = body.questions ?? [];
-    const answers = body.answers ?? [];
-    const components = body.components ?? [];
-
-    if (!grade || questions.length === 0) {
-      return NextResponse.json(
-        { error: "grade and questions are required" },
-        { status: 400 },
-      );
+    // Learner binding: the learner must exist before we write anything for
+    // it. A DB timeout here propagates -> 503 + Retry-After.
+    if (learnerId) {
+      const learner = await loadLearnerById(learnerId);
+      if (!learner) {
+        return NextResponse.json({ error: "learner not found" }, { status: 404 });
+      }
     }
 
     const answerMap = new Map(answers.map((a) => [a.questionId, a.answer]));
@@ -90,9 +89,7 @@ export async function POST(request: NextRequest) {
       const userAnswer = answerMap.get(q.id) ?? "";
       const ok = isCorrect(q, userAnswer);
       if (ok) score += 1;
-      const extraIds = Array.isArray(q.target_component_ids)
-        ? q.target_component_ids.map(String).slice(0, 8)
-        : [];
+      const extraIds = q.target_component_ids ?? [];
       observations.push({
         lcIds: [q.target_component_id, ...extraIds].filter(Boolean),
         correct: ok,
@@ -152,24 +149,29 @@ export async function POST(request: NextRequest) {
         coverage,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // DB down / hanging: 503 + Retry-After (consistent with learner
+      // create/login). Nothing was persisted, so the client should retry.
       await logEvent({
         kind: "diagnostic_grade",
         grade,
         learnerId,
         ok: false,
-        message,
+        message: sanitizeDbError(err),
       });
-      return NextResponse.json({ error: message }, { status: 500 });
+      return errorResponse(err);
     }
 
     // LC Beta posteriors (our own statistics; Postgres with in-memory fallback)
     let lcMasteryStore: "db" | "memory" | "skipped" = "skipped";
-    if (learnerId && isValidLearnerId(learnerId)) {
+    let lcIdsDropped = 0;
+    if (learnerId) {
       try {
+        const known = getStandardIndex().components;
+        const filtered = filterEvidenceLcIds(observations, (id) => known.has(id));
+        lcIdsDropped = filtered.dropped;
         lcMasteryStore = await recordLcEvidence(
           learnerId,
-          deltasFromObservations(observations),
+          deltasFromObservations(filtered.observations),
         );
       } catch (err) {
         logError("lc mastery update failed", err);
@@ -199,10 +201,21 @@ export async function POST(request: NextRequest) {
       meta: { percent: result.percent, total: result.total },
     });
 
-    return NextResponse.json({ sessionId, result, coverage, lcMasteryStore });
+    return NextResponse.json({
+      sessionId,
+      result,
+      coverage,
+      lcMasteryStore,
+      lcIdsDropped,
+    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await logEvent({ kind: "diagnostic_grade", ok: false, message });
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (!(err instanceof HttpError)) {
+      await logEvent({
+        kind: "diagnostic_grade",
+        ok: false,
+        message: sanitizeDbError(err),
+      });
+    }
+    return errorResponse(err);
   }
 }

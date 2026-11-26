@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse } from "@/lib/api-errors";
 import {
+  isValidSessionRef,
   loadMastery,
   resolveSessionId,
   sessionShortCode,
@@ -11,6 +13,12 @@ export async function GET(request: NextRequest) {
       request.nextUrl.searchParams.get("sessionId") ||
       request.nextUrl.searchParams.get("code") ||
       "";
+    if (!isValidSessionRef(q)) {
+      return NextResponse.json(
+        { error: "session not found — invalid code format (use the 8-character code or full session id)" },
+        { status: 400 },
+      );
+    }
     const sessionId = await resolveSessionId(q);
     if (!sessionId) {
       return NextResponse.json(
@@ -62,9 +70,6 @@ export async function GET(request: NextRequest) {
       skills,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 }

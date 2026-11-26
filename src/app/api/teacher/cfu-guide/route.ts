@@ -1,4 +1,5 @@
 import { withLlmRequestKey } from "@/lib/llm";
+import { errorResponse } from "@/lib/api-errors";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -75,10 +76,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

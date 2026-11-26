@@ -272,6 +272,7 @@ export type HeatmapStandardMeta = {
   code: string | null;
   description: string;
   jurisdiction?: string;
+  gradeLevel?: string[];
 };
 
 export type HeatmapLcMeta = {
@@ -294,36 +295,62 @@ export type HeatmapRow = {
   cells: HeatmapCell[];
 };
 
+function normGrade(g: string | undefined | null): string | null {
+  const t = String(g ?? "").trim();
+  if (/^k$/i.test(t)) return "K";
+  if (/^\d{1,2}$/.test(t)) return String(Number(t));
+  return null;
+}
+
 /**
  * An LC usually supports many standards across jurisdictions. To keep the
- * grid readable each LC is placed under ONE primary standard:
- * learner jurisdiction match -> Multi-State (CCSS) -> first with a code ->
- * first listed.
+ * grid readable (and keep root-gap tracing on the CCSS progression graph)
+ * each LC is placed under ONE primary standard, chosen deterministically:
+ *   1. Multi-State (CCSS) with a code
+ *   2. learner's jurisdiction with a code
+ *   3. any standard with a code
+ *   4. anything
+ * Within each tier: standards whose gradeLevel includes the learner grade
+ * first, then by code (numeric-aware), then id. Input order never matters.
  */
 export function pickPrimaryStandard(
   standards: HeatmapStandardMeta[],
   jurisdiction?: string,
+  grade?: string,
 ): HeatmapStandardMeta | null {
   if (!standards.length) return null;
   const jur = jurisdiction?.trim();
-  return (
-    (jur ? standards.find((s) => s.jurisdiction === jur && s.code) : undefined) ??
-    standards.find((s) => (s.jurisdiction ?? "Multi-State") === "Multi-State" && s.code) ??
-    standards.find((s) => s.code) ??
-    standards[0]
+  const g = normGrade(grade);
+  const tier = (s: HeatmapStandardMeta) => {
+    const ms = (s.jurisdiction ?? "Multi-State") === "Multi-State";
+    if (ms && s.code) return 0;
+    if (jur && s.jurisdiction === jur && s.code) return 1;
+    if (s.code) return 2;
+    return 3;
+  };
+  const gradeMiss = (s: HeatmapStandardMeta) =>
+    g && (s.gradeLevel ?? []).some((x) => normGrade(x) === g) ? 0 : 1;
+  const sorted = [...standards].sort(
+    (a, b) =>
+      tier(a) - tier(b) ||
+      gradeMiss(a) - gradeMiss(b) ||
+      (a.code ?? "").localeCompare(b.code ?? "", "en", { numeric: true }) ||
+      a.id.localeCompare(b.id),
   );
+  return sorted[0];
 }
 
 export function buildHeatmap(params: {
   posteriors: Map<string, BetaParams>;
   lcMeta: HeatmapLcMeta[];
   jurisdiction?: string;
+  grade?: string;
 }): HeatmapRow[] {
   const metaById = new Map(params.lcMeta.map((m) => [m.id, m]));
   const rows = new Map<string, HeatmapRow & { parts: BetaParams[] }>();
   for (const [lcId, p] of params.posteriors) {
     const meta = metaById.get(lcId);
-    const std = meta ? pickPrimaryStandard(meta.standards, params.jurisdiction) : null;
+    const std = meta ? pickPrimaryStandard(meta.standards, params.jurisdiction, params.grade) : null;
     const key = std?.id ?? "unmapped";
     const row =
       rows.get(key) ??

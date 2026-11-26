@@ -1,4 +1,5 @@
 import { withLlmRequestKey } from "@/lib/llm";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -18,7 +19,7 @@ import { generateTeacherLesson } from "@/lib/skills/lesson-plan";
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       componentId?: string;
       refresh?: boolean;
@@ -76,10 +77,7 @@ export async function POST(request: NextRequest) {
       cached: false,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

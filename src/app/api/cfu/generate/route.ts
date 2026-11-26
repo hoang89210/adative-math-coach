@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 import {
   cacheCfu,
   getCachedCfu,
@@ -17,7 +18,7 @@ export const maxDuration = 60;
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
     try {
-      const body = (await request.json()) as {
+      const body = (await readJsonBody(request)) as {
         sessionId?: string;
         componentId?: string;
         refresh?: boolean;
@@ -74,10 +75,7 @@ export async function POST(request: NextRequest) {
         misconceptionCount: misconceptionHints.length,
       });
     } catch (err) {
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : String(err) },
-        { status: 500 },
-      );
+      return errorResponse(err);
     }
   });
 }

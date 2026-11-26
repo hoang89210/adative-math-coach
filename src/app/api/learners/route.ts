@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { HttpError, errorResponse, readJsonBody } from "@/lib/api-errors";
 import {
   createLearner,
   findLearnerByCode,
@@ -26,7 +27,7 @@ function rateLimitResponse(retryAfterSec: number) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       action?: "create" | "login" | "lookup";
       pin?: string;
       code?: string;
@@ -90,6 +91,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
+    if (err instanceof HttpError) return errorResponse(err);
     if (isDbTimeoutError(err)) {
       return NextResponse.json(
         { error: sanitizeDbError(err) || "Request failed" },
