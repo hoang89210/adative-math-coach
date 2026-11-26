@@ -8,6 +8,7 @@ import {
 } from "@/lib/learners";
 import { dbFailFastResponseInit, isDbTimeoutError } from "@/lib/db/client";
 import { sanitizeDbError } from "@/lib/sanitize-error";
+import { issueLearnerToken } from "@/lib/learner-token";
 import {
   checkPinLoginLimits,
   clearPinLoginFailures,
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({
         learnerId: profile.id,
+        learnerToken: issueLearnerToken(profile.id),
         publicCode: profile.publicCode,
         pin,
         view: publicLearnerView(profile),
@@ -73,6 +75,7 @@ export async function POST(request: NextRequest) {
       await clearPinLoginFailures(ip, code);
       return NextResponse.json({
         learnerId: profile.id,
+        learnerToken: issueLearnerToken(profile.id),
         publicCode: profile.publicCode,
         view: publicLearnerView(profile),
       });

@@ -42,8 +42,23 @@ describe("classifyMastery thresholds", () => {
   test("no data -> insufficient", () => {
     assert.equal(classifyMastery(prior()), "insufficient");
   });
-  test("one wrong (n=1) is still insufficient, not gap", () => {
-    assert.equal(classifyMastery({ alpha: 1, beta: 2 }), "insufficient");
+  test("one wrong (n=1, zero correct) -> gap (lead rule: n>=1 and all wrong)", () => {
+    assert.equal(classifyMastery({ alpha: 1, beta: 2 }), "gap");
+  });
+  test("one right (n=1) -> insufficient", () => {
+    assert.equal(classifyMastery({ alpha: 2, beta: 1 }), "insufficient");
+  });
+  test("half an item wrong (n=0.5, multi-LC tag) -> insufficient (all-wrong rule needs n>=1)", () => {
+    assert.equal(classifyMastery({ alpha: 1, beta: 1.5 }), "insufficient");
+  });
+  test("4 of 5 right (mean 5/7 ≈ .714, n=5) -> mastered (threshold .7)", () => {
+    assert.equal(classifyMastery({ alpha: 5, beta: 2 }), "mastered");
+  });
+  test("2 of 3 right (mean .6) -> learning", () => {
+    assert.equal(classifyMastery({ alpha: 3, beta: 2 }), "learning");
+  });
+  test("1 of 3 right (mean .4, n=3) -> gap", () => {
+    assert.equal(classifyMastery({ alpha: 2, beta: 3 }), "gap");
   });
   test("two wrong (n=2, mean .25) -> gap", () => {
     assert.equal(classifyMastery({ alpha: 1, beta: 3 }), "gap");
@@ -51,7 +66,7 @@ describe("classifyMastery thresholds", () => {
   test("1 right 1 wrong (mean .5) -> learning (gap needs mean < .5)", () => {
     assert.equal(classifyMastery({ alpha: 2, beta: 2 }), "learning");
   });
-  test("3 right (mean .8, n=3) -> mastered", () => {
+  test("3 of 3 right (mean .8, n=3) -> mastered", () => {
     assert.equal(classifyMastery({ alpha: 4, beta: 1 }), "mastered");
   });
   test("2 right (n=2, mean .75) -> learning (mastered needs n >= 3)", () => {

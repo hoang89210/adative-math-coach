@@ -1,6 +1,10 @@
 import { getStandardIndex } from "@/lib/data/learning-components";
 import { loadProgression } from "@/lib/data/progression";
-import { type RootGapReport, analyzeRootGaps } from "@/lib/data/prereq-graph";
+import {
+  type RootGapReport,
+  analyzeRootGaps,
+  lcStandardsWithAlignment,
+} from "@/lib/data/prereq-graph";
 import {
   type BetaParams,
   type HeatmapRow,
@@ -43,13 +47,7 @@ export function buildLcMasteryReport(
     return {
       id,
       description: c?.description ?? id,
-      standards: (c?.relatedStandards ?? []).map((s) => ({
-        id: s.id,
-        code: s.code,
-        description: s.description,
-        jurisdiction: s.jurisdiction,
-        gradeLevel: s.gradeLevel,
-      })),
+      standards: c ? lcStandardsWithAlignment(c) : [],
     };
   });
   const prog = loadProgression();

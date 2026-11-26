@@ -391,6 +391,7 @@ function TeacherPageInner() {
           key={session.sessionId}
           request={{ sessionId: session.sessionId }}
           title="Mastery heatmap (standard → learning component)"
+          aggregationNote="Aggregates ALL diagnostic sessions of this learner (not only the session code above). Cells and root gaps use the learner's cumulative answers."
         />
       )}
 

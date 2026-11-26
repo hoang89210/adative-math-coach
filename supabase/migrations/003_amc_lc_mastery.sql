@@ -18,3 +18,15 @@ create table if not exists amc_lc_mastery (
 
 create index if not exists amc_lc_mastery_learner_idx
   on amc_lc_mastery (learner_id, updated_at desc);
+
+-- Runtime role used by the deployed app on the shared DB. Guarded so the
+-- migration also runs where that role does not exist (local, Supabase
+-- default roles only). Idempotent: GRANT on an already-granted privilege is
+-- a no-op.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'amc_app') then
+    grant select, insert, update, delete on table amc_lc_mastery to amc_app;
+  end if;
+end
+$$;

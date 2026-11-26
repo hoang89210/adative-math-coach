@@ -19,6 +19,8 @@ import { loadLearnerById, mergeDiagnosticIntoLearner } from "@/lib/learners";
 import { deltasFromObservations, type ItemObservation } from "@/lib/lc-mastery";
 import { recordLcEvidence } from "@/lib/lc-mastery-store";
 import { saveMastery } from "@/lib/mastery";
+import { verifyLearnerToken } from "@/lib/learner-token";
+import { consumeRequestRateLimit, getClientIp } from "@/lib/pin-rate-limit";
 import type {
   ComponentResult,
   DiagnosticQuestion,
@@ -26,6 +28,10 @@ import type {
 } from "@/lib/types/quiz";
 
 export const maxDuration = 60;
+
+/** Evidence-write throttles per 15-minute window (shared amc_rate_limits). */
+export const GRADE_RATE_LIMIT_PER_IP = 60;
+export const GRADE_RATE_LIMIT_PER_LEARNER = 30;
 
 function normalizeAnswer(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -59,8 +65,34 @@ export async function POST(request: NextRequest) {
     const input = validateGradeBody(
       await readJsonBody(request, GRADE_MAX_BODY_BYTES),
     );
-    const { grade, jurisdiction, learnerId, questions, answers, components } =
-      input;
+    const { grade, jurisdiction, questions, answers, components } = input;
+
+    // Ownership: only link / write evidence for a learner when the caller
+    // proves it created the learner or knows its PIN (signed token from
+    // /api/learners). Without it we still grade, but nothing is written to
+    // that learner (learnerLinked:false) and the UI asks to sign in again.
+    let learnerId: string | undefined;
+    let learnerLinkIssue: string | undefined;
+    if (input.learnerId) {
+      const check = verifyLearnerToken(input.learnerId, input.learnerToken);
+      if (check.ok) learnerId = input.learnerId;
+      else learnerLinkIssue = check.reason;
+    }
+
+    // Rate limit (same infra as PIN login): per IP always, per learner when linked.
+    const ip = getClientIp(request);
+    const limit = await consumeRequestRateLimit([
+      { key: `grade:ip:${ip}`, max: GRADE_RATE_LIMIT_PER_IP },
+      ...(learnerId
+        ? [{ key: `grade:learner:${learnerId.toLowerCase()}`, max: GRADE_RATE_LIMIT_PER_LEARNER }]
+        : []),
+    ]);
+    if (limit.limited) {
+      return NextResponse.json(
+        { error: "Too many submissions. Please wait and try again." },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfterSec) } },
+      );
+    }
 
     // Learner binding: the learner must exist before we write anything for
     // it. A DB timeout here propagates -> 503 + Retry-After.
@@ -207,6 +239,8 @@ export async function POST(request: NextRequest) {
       coverage,
       lcMasteryStore,
       lcIdsDropped,
+      learnerLinked: Boolean(learnerId),
+      ...(learnerLinkIssue ? { learnerLinkIssue } : {}),
     });
   } catch (err) {
     if (!(err instanceof HttpError)) {

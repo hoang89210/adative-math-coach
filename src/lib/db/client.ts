@@ -142,10 +142,21 @@ export function getPool(): Pool {
   return pool;
 }
 
+let queryObserver: ((text: string) => void) | null = null;
+
+/**
+ * Test-only: observe the SQL TEXT of every dbQuery call (never the params,
+ * so no learner data / secrets). Pass null to stop.
+ */
+export function setDbQueryObserverForTests(fn: ((text: string) => void) | null) {
+  queryObserver = fn;
+}
+
 export async function dbQuery<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[],
 ) {
+  queryObserver?.(text);
   assertDbAvailable();
   try {
     return await getPool().query<T>(text, params);

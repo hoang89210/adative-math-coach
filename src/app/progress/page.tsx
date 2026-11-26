@@ -36,6 +36,7 @@ export default function ProgressPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [learnerId, setLearnerId] = useState<string | null>(null);
+  const [learnerToken, setLearnerToken] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -50,11 +51,14 @@ export default function ProgressPage() {
       if (!res.ok) throw new Error(j.error || "Failed");
       setView(j.view);
       setLearnerId(j.learnerId);
+      setLearnerToken(j.learnerToken ?? null);
       sessionStorage.setItem("learnerId", j.learnerId);
+      if (j.learnerToken) sessionStorage.setItem("learnerToken", j.learnerToken);
       sessionStorage.setItem("learnerCode", j.publicCode);
     } catch (e) {
       setView(null);
       setLearnerId(null);
+      setLearnerToken(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -117,7 +121,7 @@ export default function ProgressPage() {
 
           {learnerId && (
             <LcMasterySection
-              request={{ learnerId }}
+              request={{ learnerId, learnerToken: learnerToken ?? undefined }}
               storageKey={`amc.lcMastery.v1.${learnerId}`}
             />
           )}

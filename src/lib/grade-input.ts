@@ -28,6 +28,8 @@ export type GradeInput = {
   grade: string;
   jurisdiction?: string;
   learnerId?: string;
+  /** ownership proof issued by /api/learners (never logged) */
+  learnerToken?: string;
   questions: DiagnosticQuestion[];
   answers: AnswerSubmission[];
   components: Array<{ id: string; description: string }>;
@@ -65,6 +67,10 @@ export function validateGradeBody(body: Record<string, unknown>): GradeInput {
     const id = str(body.learnerId, 64).trim();
     if (!UUID_RE.test(id)) throw new HttpError(400, "invalid learnerId");
     learnerId = id;
+  }
+  let learnerToken: string | undefined;
+  if (typeof body.learnerToken === "string" && body.learnerToken) {
+    learnerToken = body.learnerToken.slice(0, 200);
   }
 
   const questions: DiagnosticQuestion[] = rawQs.map((raw, i) => {
@@ -110,7 +116,7 @@ export function validateGradeBody(body: Record<string, unknown>): GradeInput {
     return { id: str(c.id, MAX_ID_LEN), description: str(c.description, 1_000) };
   });
   const jurisdiction = str(body.jurisdiction, 60).trim() || undefined;
-  return { grade: grade.toUpperCase() === "K" ? "K" : grade, jurisdiction, learnerId, questions, answers, components };
+  return { grade: grade.toUpperCase() === "K" ? "K" : grade, jurisdiction, learnerId, learnerToken, questions, answers, components };
 }
 
 /**

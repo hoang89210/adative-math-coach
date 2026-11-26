@@ -1,21 +1,28 @@
 /**
  * Root-gap tracing — pure graph logic, no I/O.
  *
- * Given a target standard that is in "gap" (or contains an LC in gap), walk
- * the prerequisite graph BACKWARDS breadth-first up to `maxDepth` levels and
- * pick the deepest prerequisite that is not mastered as the "root gap".
+ * Policy (lead decision after QA round 1, replaces "deepest non-mastered
+ * within 3 levels"):
+ *   - Walk prerequisites BACKWARDS breadth-first from a target standard that
+ *     is in gap, up to `maxDepth` (3) levels.
+ *   - Real Knowledge-Graph edges are preferred: the graph only offers a
+ *     heuristic edge when a node has no real edge, and a path may contain at
+ *     most `maxHeuristicHops` (1) heuristic hop.
+ *   - Never visit a standard more than `maxGradeDrop` (2) grades below the
+ *     target standard.
+ *   - Pick the NEAREST prerequisite that HAS DATA and is in "gap"
+ *     (ties: lower mean, then fewer heuristic hops, then id) -> "review"
+ *     result ("Ôn nền tảng").
+ *   - Only nodes with data that are not mastered are expanded further;
+ *     no-data nodes are leaves (walking through unknowns proves nothing) and
+ *     mastered nodes are trusted.
+ *   - If no gap-with-data is found but some DIRECT prerequisites have no
+ *     data -> "diagnose" result: quick checks for those direct
+ *     prerequisites, and NO "ôn" suggestion.
+ *   - Otherwise null.
  *
- * Rules:
- *   - Mastered prerequisites are not expanded: if the learner owns a
- *     prerequisite we trust its own foundations (prunes noise).
- *   - Candidates = visited nodes at depth >= 1 whose state != "mastered".
- *   - Root = max depth; ties -> gap > learning > insufficient, then lower
- *     mean, then id (deterministic).
- *   - If the root has no data ("insufficient"), callers should propose quick
- *     diagnostic items for it (see `diagnosticProbes`).
- *
- * Each edge carries its provenance so the UI / PR can say whether the
- * suggestion came from real Knowledge Graph data or from the heuristic.
+ * Each edge carries provenance so the UI / PR can say whether the result came
+ * from real Knowledge Graph data or from the heuristic.
  */
 
 import type { MasteryState } from "./lc-mastery";
@@ -34,6 +41,8 @@ export type NodeStatus = {
   state: MasteryState;
   mean: number;
   n: number;
+  /** numeric grade (K = 0, high school = 9), null when unknown */
+  grade?: number | null;
 };
 
 export type RootGapInput = {
@@ -41,103 +50,148 @@ export type RootGapInput = {
   getPrereqs: (id: string) => PrereqEdge[];
   statusOf: (id: string) => NodeStatus;
   maxDepth?: number;
+  maxGradeDrop?: number;
+  maxHeuristicHops?: number;
 };
 
-export type RootGapResult = {
+type Common = {
   targetId: string;
+  /** "real" if every hop used is KG data; "heuristic" if any hop is heuristic */
+  dataSource: "real" | "heuristic";
+  visited: number;
+};
+
+export type RootGapReview = Common & {
+  kind: "review";
   rootId: string;
   depth: number;
   /** target -> ... -> root */
   path: string[];
   /** provenance of each hop along `path` (length = path.length - 1) */
   pathSources: PrereqSource[];
-  /** "real" if every hop is KG data; "heuristic" if any hop is heuristic */
-  dataSource: "real" | "heuristic";
   rootStatus: NodeStatus;
-  needsDiagnostic: boolean;
-  visited: number;
 };
+
+export type RootGapDiagnose = Common & {
+  kind: "diagnose";
+  /** direct prerequisites with no data yet (max 3, real edges first) */
+  prereqs: PrereqEdge[];
+};
+
+export type RootGapResult = RootGapReview | RootGapDiagnose;
 
 export const ROOT_GAP_MAX_DEPTH = 3;
+export const ROOT_GAP_MAX_GRADE_DROP = 2;
+export const ROOT_GAP_MAX_HEURISTIC_HOPS = 1;
+const NO_DATA_EPS = 1e-9;
 
-const STATE_RANK: Record<MasteryState, number> = {
-  gap: 0,
-  learning: 1,
-  insufficient: 2,
-  mastered: 3,
-};
+export function hasData(st: NodeStatus) {
+  return st.n > NO_DATA_EPS;
+}
+
+const sourceRank = (s: PrereqSource) => (s === "heuristic" ? 1 : 0);
 
 export function findRootGap(input: RootGapInput): RootGapResult | null {
   const maxDepth = Math.max(1, Math.min(input.maxDepth ?? ROOT_GAP_MAX_DEPTH, 6));
-  const parent = new Map<string, { from: string; source: PrereqSource }>();
-  const depth = new Map<string, number>([[input.targetId, 0]]);
-  const status = new Map<string, NodeStatus>();
-  const queue: string[] = [input.targetId];
+  const maxDrop = input.maxGradeDrop ?? ROOT_GAP_MAX_GRADE_DROP;
+  const maxHeur = input.maxHeuristicHops ?? ROOT_GAP_MAX_HEURISTIC_HOPS;
+  const statusOf = (id: string): NodeStatus =>
+    input.statusOf(id) ?? { state: "insufficient", mean: 0.5, n: 0 };
+  const targetStatus = statusOf(input.targetId);
+  const floor =
+    typeof targetStatus.grade === "number" ? targetStatus.grade - maxDrop : null;
 
-  while (queue.length) {
-    const id = queue.shift()!;
-    const d = depth.get(id)!;
-    if (d >= maxDepth) continue;
-    if (d > 0) {
-      const st = status.get(id)!;
-      if (st.state === "mastered") continue; // prune
+  type Info = { depth: number; from: string; source: PrereqSource; heur: number; st: NodeStatus };
+  const info = new Map<string, Info>();
+  const seen = new Set<string>([input.targetId]);
+  const heurAt = new Map<string, number>([[input.targetId, 0]]);
+  let frontier: string[] = [input.targetId];
+  const direct: PrereqEdge[] = [];
+
+  for (let depth = 1; depth <= maxDepth && frontier.length; depth++) {
+    const level: string[] = [];
+    for (const from of frontier) {
+      const edges = [...input.getPrereqs(from)].sort(
+        (a, b) => sourceRank(a.source) - sourceRank(b.source) || a.id.localeCompare(b.id),
+      );
+      for (const e of edges) {
+        if (!e.id || seen.has(e.id)) continue;
+        const heur = (heurAt.get(from) ?? 0) + (e.source === "heuristic" ? 1 : 0);
+        if (heur > maxHeur) continue;
+        const st = statusOf(e.id);
+        if (floor !== null && typeof st.grade === "number" && st.grade < floor) continue;
+        seen.add(e.id);
+        heurAt.set(e.id, heur);
+        info.set(e.id, { depth, from, source: e.source, heur, st });
+        level.push(e.id);
+        if (depth === 1) direct.push(e);
+      }
     }
-    const edges = [...input.getPrereqs(id)].sort((a, b) => a.id.localeCompare(b.id));
-    for (const e of edges) {
-      if (!e.id || depth.has(e.id)) continue;
-      depth.set(e.id, d + 1);
-      parent.set(e.id, { from: id, source: e.source });
-      status.set(e.id, input.statusOf(e.id));
-      queue.push(e.id);
+
+    const gaps = level
+      .filter((id) => {
+        const st = info.get(id)!.st;
+        return st.state === "gap" && hasData(st);
+      })
+      .sort(
+        (a, b) =>
+          info.get(a)!.st.mean - info.get(b)!.st.mean ||
+          info.get(a)!.heur - info.get(b)!.heur ||
+          a.localeCompare(b),
+      );
+    if (gaps.length) {
+      const rootId = gaps[0];
+      const path = [rootId];
+      const sources: PrereqSource[] = [];
+      let cur = rootId;
+      while (cur !== input.targetId) {
+        const i = info.get(cur)!;
+        sources.unshift(i.source);
+        path.unshift(i.from);
+        cur = i.from;
+      }
+      return {
+        kind: "review",
+        targetId: input.targetId,
+        rootId,
+        depth,
+        path,
+        pathSources: sources,
+        dataSource: sources.includes("heuristic") ? "heuristic" : "real",
+        rootStatus: info.get(rootId)!.st,
+        visited: seen.size,
+      };
     }
+    // expand only nodes with data that are not mastered
+    frontier = level.filter((id) => {
+      const st = info.get(id)!.st;
+      return hasData(st) && st.state !== "mastered";
+    });
   }
 
-  let best: string | null = null;
-  for (const [id, d] of depth) {
-    if (d === 0) continue;
-    const st = status.get(id)!;
-    if (st.state === "mastered") continue;
-    if (best === null) {
-      best = id;
-      continue;
-    }
-    const bd = depth.get(best)!;
-    const bs = status.get(best)!;
-    const better =
-      d > bd ||
-      (d === bd &&
-        (STATE_RANK[st.state] < STATE_RANK[bs.state] ||
-          (STATE_RANK[st.state] === STATE_RANK[bs.state] &&
-            (st.mean < bs.mean || (st.mean === bs.mean && id < best)))));
-    if (better) best = id;
+  const noData = direct
+    .filter((e) => !hasData(info.get(e.id)!.st))
+    .sort((a, b) => sourceRank(a.source) - sourceRank(b.source) || a.id.localeCompare(b.id))
+    .slice(0, 3);
+  if (noData.length) {
+    return {
+      kind: "diagnose",
+      targetId: input.targetId,
+      prereqs: noData,
+      dataSource: noData.some((e) => e.source === "heuristic") ? "heuristic" : "real",
+      visited: seen.size,
+    };
   }
-  if (!best) return null;
-
-  const path: string[] = [best];
-  const sources: PrereqSource[] = [];
-  let cur = best;
-  while (cur !== input.targetId) {
-    const p = parent.get(cur)!;
-    sources.unshift(p.source);
-    path.unshift(p.from);
-    cur = p.from;
-  }
-  const rootStatus = status.get(best)!;
-  return {
-    targetId: input.targetId,
-    rootId: best,
-    depth: depth.get(best)!,
-    path,
-    pathSources: sources,
-    dataSource: sources.includes("heuristic") ? "heuristic" : "real",
-    rootStatus,
-    needsDiagnostic: rootStatus.state === "insufficient",
-    visited: depth.size,
-  };
+  return null;
 }
 
 export function foundationSuggestion(rootLabel: string, targetLabel: string) {
   return `Ôn nền tảng: ${rootLabel} trước khi tiếp ${targetLabel}`;
+}
+
+/** Used when prerequisites have no data yet: check first, do not prescribe review. */
+export function diagnoseSuggestion(prereqLabels: string[], targetLabel: string) {
+  return `Kiểm tra nhanh nền tảng: ${prereqLabels.join(", ")} trước khi tiếp ${targetLabel}`;
 }
 
 export type DiagnosticProbe = {

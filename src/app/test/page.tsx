@@ -68,6 +68,7 @@ export default function TestPage() {
           (currentTest as { learnerId?: string }).learnerId ||
           sessionStorage.getItem("learnerId") ||
           undefined,
+        learnerToken: sessionStorage.getItem("learnerToken") || undefined,
         questions: currentTest.questions,
         components: currentTest.components,
         answers: Object.entries(answers).map(([questionId, answer]) => ({
@@ -98,6 +99,7 @@ export default function TestPage() {
           result: data.result,
           roadmap: roadData.roadmap,
           coverage: data.coverage ?? null,
+          learnerNotSaved: payload.learnerId && data.learnerLinked === false ? true : undefined,
         }),
       );
       router.push("/results");

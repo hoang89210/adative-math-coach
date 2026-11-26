@@ -14,9 +14,10 @@
  *   confidence   lower80 = 20% quantile of Beta(alpha, beta)
  *                (we are 80% sure true mastery is at least this)
  *
- * States (thresholds are exported so UI/tests stay in sync):
- *   mastered      mean >= 0.8 && n >= 3
- *   gap           mean <  0.5 && n >= 2
+ * States (thresholds are exported so UI/tests stay in sync; lead decision
+ * after QA round 1):
+ *   mastered      mean >= 0.7 && n >= 3        (3/3 and 4/5 are mastered)
+ *   gap           (mean < 0.5 && n >= 2) || (n >= 1 && zero correct)
  *   insufficient  n < 2   (and not one of the above)
  *   learning      everything else
  *
@@ -29,10 +30,12 @@ export type BetaParams = { alpha: number; beta: number };
 export type MasteryState = "mastered" | "gap" | "learning" | "insufficient";
 
 export const PRIOR: Readonly<BetaParams> = Object.freeze({ alpha: 1, beta: 1 });
-export const MASTERED_MIN_MEAN = 0.8;
+export const MASTERED_MIN_MEAN = 0.7;
 export const MASTERED_MIN_N = 3;
 export const GAP_MAX_MEAN = 0.5;
 export const GAP_MIN_N = 2;
+/** Any evidence with zero correct answers is a gap (e.g. 1 wrong of 1). */
+export const GAP_ALL_WRONG_MIN_N = 1;
 export const INSUFFICIENT_BELOW_N = 2;
 export const LOWER_BOUND_Q = 0.2;
 
@@ -67,6 +70,7 @@ export function classifyMastery(p: BetaParams): MasteryState {
   const mean = masteryMean(p);
   if (mean >= MASTERED_MIN_MEAN - EPS && n >= MASTERED_MIN_N) return "mastered";
   if (mean < GAP_MAX_MEAN - EPS && n >= GAP_MIN_N) return "gap";
+  if (n >= GAP_ALL_WRONG_MIN_N && p.alpha - PRIOR.alpha < EPS) return "gap";
   if (n < INSUFFICIENT_BELOW_N) return "insufficient";
   return "learning";
 }
@@ -273,6 +277,8 @@ export type HeatmapStandardMeta = {
   description: string;
   jurisdiction?: string;
   gradeLevel?: string[];
+  /** CCSS standard reached via hasStandardAlignment from one of the LC's state standards */
+  aligned?: boolean;
 };
 
 export type HeatmapLcMeta = {
@@ -302,16 +308,22 @@ function normGrade(g: string | undefined | null): string | null {
   return null;
 }
 
+/** True when the learner is on CCSS (no state chosen, "All" or "Multi-State"). */
+export function isMultiStateLearner(jurisdiction?: string) {
+  const j = jurisdiction?.trim();
+  return !j || j === "All" || j === "Multi-State";
+}
+
 /**
- * An LC usually supports many standards across jurisdictions. To keep the
- * grid readable (and keep root-gap tracing on the CCSS progression graph)
- * each LC is placed under ONE primary standard, chosen deterministically:
- *   1. Multi-State (CCSS) with a code
- *   2. learner's jurisdiction with a code
- *   3. any standard with a code
- *   4. anything
- * Within each tier: standards whose gradeLevel includes the learner grade
- * first, then by code (numeric-aware), then id. Input order never matters.
+ * An LC usually supports many standards across jurisdictions. Each LC is
+ * placed under ONE primary standard, chosen deterministically:
+ *   - Only CCSS (Multi-State) standards or the learner's OWN state are
+ *     eligible. A Multi-State learner never gets another state's code
+ *     (e.g. Oregon 4.GM.*); returns null instead ("no CCSS standard").
+ *   - Tier: CCSS with a code -> own state with a code -> uncoded CCSS/own.
+ *   - Within a tier: the LC's own standards before ones reached through
+ *     hasStandardAlignment, then standards whose gradeLevel includes the
+ *     learner grade, then code (numeric-aware), then id.
  */
 export function pickPrimaryStandard(
   standards: HeatmapStandardMeta[],
@@ -319,20 +331,23 @@ export function pickPrimaryStandard(
   grade?: string,
 ): HeatmapStandardMeta | null {
   if (!standards.length) return null;
+  const msLearner = isMultiStateLearner(jurisdiction);
   const jur = jurisdiction?.trim();
   const g = normGrade(grade);
+  const isMs = (s: HeatmapStandardMeta) => (s.jurisdiction ?? "Multi-State") === "Multi-State";
+  const eligible = standards.filter((s) => isMs(s) || (!msLearner && s.jurisdiction === jur));
+  if (!eligible.length) return null;
   const tier = (s: HeatmapStandardMeta) => {
-    const ms = (s.jurisdiction ?? "Multi-State") === "Multi-State";
-    if (ms && s.code) return 0;
-    if (jur && s.jurisdiction === jur && s.code) return 1;
-    if (s.code) return 2;
-    return 3;
+    if (isMs(s) && s.code) return 0;
+    if (s.code) return 1;
+    return 2;
   };
   const gradeMiss = (s: HeatmapStandardMeta) =>
     g && (s.gradeLevel ?? []).some((x) => normGrade(x) === g) ? 0 : 1;
-  const sorted = [...standards].sort(
+  const sorted = [...eligible].sort(
     (a, b) =>
       tier(a) - tier(b) ||
+      (a.aligned ? 1 : 0) - (b.aligned ? 1 : 0) ||
       gradeMiss(a) - gradeMiss(b) ||
       (a.code ?? "").localeCompare(b.code ?? "", "en", { numeric: true }) ||
       a.id.localeCompare(b.id),
@@ -357,7 +372,9 @@ export function buildHeatmap(params: {
       ({
         standardId: key,
         code: std?.code ?? null,
-        description: std?.description ?? "Skills without a mapped standard",
+        description:
+          std?.description ??
+          "Skills without a CCSS (or your state's) standard",
         summary: summarize(prior()),
         cells: [],
         parts: [],

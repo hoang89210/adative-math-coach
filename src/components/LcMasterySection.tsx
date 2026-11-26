@@ -37,11 +37,13 @@ export type MasteryApiResponse = {
 };
 
 type Props = {
-  request: { learnerId?: string; sessionId?: string; jurisdiction?: string };
+  request: { learnerId?: string; learnerToken?: string; sessionId?: string; jurisdiction?: string };
   storageKey?: string;
   showHeatmap?: boolean;
   showRootGaps?: boolean;
   title?: string;
+  /** shown when the API aggregated every session of the learner */
+  aggregationNote?: string;
 };
 
 const STATE_LABEL: Record<MasteryState, string> = {
@@ -94,6 +96,7 @@ export function LcMasterySection({
   showHeatmap = true,
   showRootGaps = true,
   title = "Skill mastery map",
+  aggregationNote,
 }: Props) {
   const [data, setData] = useState<MasteryApiResponse | null>(null);
   const [fromSnapshot, setFromSnapshot] = useState(false);
@@ -187,8 +190,16 @@ export function LcMasterySection({
             (red → green); faded squares have fewer than {data.thresholds.insufficientBelowN} answers.
             Hover for correct/wrong counts. Mastered: ≥{Math.round(data.thresholds.masteredMinMean * 100)}% with ≥
             {data.thresholds.masteredMinN} answers · Gap: &lt;{Math.round(data.thresholds.gapMaxMean * 100)}% with ≥
-            {data.thresholds.gapMinN}.
+            {data.thresholds.gapMinN}, or every answer wrong.
           </p>
+          {data.mode === "learner" && aggregationNote && (
+            <p
+              className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-900"
+              data-testid="aggregation-note"
+            >
+              {aggregationNote}
+            </p>
+          )}
           {data.heatmap.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-500">
               No answers yet — finish a diagnostic while signed in.
@@ -277,19 +288,30 @@ export function RootGapPanel({ reports }: { reports: RootGapReport[] }) {
     >
       <h2 className="text-lg font-semibold text-zinc-900">Foundation first</h2>
       <p className="mt-1 text-xs text-zinc-600">
-        We traced your gaps back through earlier standards (up to 3 steps) to find the
-        deepest skill that is not mastered yet.
+        For each gap we look back through earlier standards (Learning Commons links
+        first; a guessed link at most one step; never more than 2 grades lower) and
+        pick the nearest earlier skill that you answered and still have a gap in. If
+        the earlier skills have no answers yet, we suggest a quick check instead of a
+        review.
       </p>
       <ul className="mt-3 space-y-3">
         {reports.map((r) => (
           <li
-            key={`${r.root.standardId}-${r.target.standardId}`}
+            key={`${r.kind}-${r.root?.standardId ?? "check"}-${r.target.standardId}`}
+            data-kind={r.kind}
             className="rounded-xl border border-orange-100 bg-white px-4 py-3"
           >
             <p className="text-sm font-semibold text-orange-950">{r.suggestion}</p>
-            <p className="mt-1 text-xs text-zinc-600" title={r.root.description}>
-              {r.root.lcDescription ?? r.root.description}
-            </p>
+            {r.root ? (
+              <p className="mt-1 text-xs text-zinc-600" title={r.root.description}>
+                {r.root.lcDescription ?? r.root.description}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-zinc-600">
+                No answers yet on {r.checkPrereqs.map((c) => c.label).join(", ")} (the
+                skills right before {r.target.label}). Answer the quick check below first.
+              </p>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px]">
               {r.path
                 .slice()
@@ -314,15 +336,17 @@ export function RootGapPanel({ reports }: { reports: RootGapReport[] }) {
               >
                 {r.dataSource === "real" ? "Learning Commons progression" : "Heuristic (same domain, lower grade)"}
               </span>
-              <span className="text-zinc-500">
-                · root: {STATE_LABEL[r.root.state]}
-                {r.root.n > 0 ? ` (${Math.round(r.root.mean * 100)}%, n=${fmt(r.root.n)})` : ""}
-              </span>
+              {r.root && (
+                <span className="text-zinc-500">
+                  · root: {STATE_LABEL[r.root.state]}
+                  {r.root.n > 0 ? ` (${Math.round(r.root.mean * 100)}%, n=${fmt(r.root.n)})` : ""}
+                </span>
+              )}
             </div>
             {r.diagnostics.length > 0 && (
               <div className="mt-2 rounded-lg bg-zinc-50 px-3 py-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-                  Quick diagnostic (no data yet)
+                  Quick check (no data yet)
                 </p>
                 <ol className="mt-1 list-decimal space-y-1 pl-5 text-xs text-zinc-700">
                   {r.diagnostics.map((d, i) => (

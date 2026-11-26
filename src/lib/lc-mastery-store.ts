@@ -64,7 +64,18 @@ async function ensureTable(): Promise<boolean> {
   if (Date.now() < nextEnsureAt) return false;
   tableReady = (async () => {
     try {
-      await withTimeout(dbQuery(ENSURE_TABLE_SQL), LC_MASTERY_QUERY_TIMEOUT_MS, "ensureLcMasteryTable");
+      // Existence check first: a runtime role without CREATE on the schema
+      // (e.g. amc_app on PG15+) fails `create table if not exists` even when
+      // the table already exists (migration 003), which would silently push
+      // every learner to the in-memory fallback.
+      const { rows } = await withTimeout(
+        dbQuery<{ t: string | null }>(`select to_regclass('amc_lc_mastery')::text as t`),
+        LC_MASTERY_QUERY_TIMEOUT_MS,
+        "checkLcMasteryTable",
+      );
+      if (!rows[0]?.t) {
+        await withTimeout(dbQuery(ENSURE_TABLE_SQL), LC_MASTERY_QUERY_TIMEOUT_MS, "ensureLcMasteryTable");
+      }
       tableReadyOk = true;
       return true;
     } catch (err) {

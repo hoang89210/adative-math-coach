@@ -106,21 +106,18 @@ async function main() {
     }
   }
 
-  // Only keep alignments whose CCSS target participates in the progression;
-  // others add size without enabling any prerequisite lookup.
+  // Keep ALL math alignments: they are used both for prerequisites (when
+  // the CCSS target is in the progression) and to map state-only learning
+  // components onto a CCSS primary standard for Multi-State learners.
   const inGraph = new Set([
     ...Object.keys(buildsTowards),
     ...Object.keys(prerequisitesOf),
   ]);
   let keptAlignments = 0;
-  for (const [s, targets] of Object.entries(alignedToCcss)) {
-    const kept = targets.filter((t) => inGraph.has(t));
-    if (kept.length) {
-      alignedToCcss[s] = kept;
-      keptAlignments += kept.length;
-    } else {
-      delete alignedToCcss[s];
-    }
+  let alignmentsIntoGraph = 0;
+  for (const targets of Object.values(alignedToCcss)) {
+    keptAlignments += targets.length;
+    alignmentsIntoGraph += targets.filter((t) => inGraph.has(t)).length;
   }
 
   const payload = {
@@ -131,6 +128,7 @@ async function main() {
       "Learning Commons Knowledge Graph: buildsTowards (Student Achievement Partners, CC0) + hasStandardAlignment (Learning Commons, CC BY 4.0)",
     edgeCount,
     alignmentCount: keptAlignments,
+    alignmentsIntoGraph,
     buildsTowards,
     prerequisitesOf,
     alignedToCcss,
@@ -139,7 +137,7 @@ async function main() {
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(payload));
   console.log(
-    `Wrote ${outPath} edges=${edgeCount} unresolved=${unresolved} alignments(all)=${alignmentCount} alignments(kept)=${keptAlignments}`,
+    `Wrote ${outPath} edges=${edgeCount} unresolved=${unresolved} alignments(all)=${alignmentCount} alignments(kept)=${keptAlignments} intoGraph=${alignmentsIntoGraph}`,
   );
 }
 

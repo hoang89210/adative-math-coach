@@ -31,6 +31,8 @@ type ResultsPayload = {
   result: GradeResult;
   roadmap: Roadmap;
   coverage?: CoverageSnap | null;
+  /** grade route could not verify the learner sign-in -> not saved to the learner */
+  learnerNotSaved?: boolean;
 };
 
 type ActivePanel =
@@ -321,6 +323,16 @@ export default function ResultsPage() {
           You scored {result.score}/{result.total} ({result.percent}%)
         </h1>
         <p className="leading-relaxed text-zinc-600">{roadmap.summary}</p>
+        {data.learnerNotSaved && (
+          <p
+            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            data-testid="learner-not-saved"
+          >
+            This result was not added to your learner progress because your sign-in
+            could not be verified. Sign in again with your learner code and PIN before
+            the next test.
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2 pt-2">
           <span className="rounded-lg bg-zinc-100 px-2.5 py-1 font-mono text-xs font-semibold text-zinc-800">
             Code {shortCode}

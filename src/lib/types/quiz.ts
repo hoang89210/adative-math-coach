@@ -66,18 +66,21 @@ export type CoachPriority = {
 };
 
 export type FoundationStep = {
-  /** "Ôn nền tảng: X trước khi tiếp Y" */
+  /** review: "Ôn nền tảng: X trước khi tiếp Y"; diagnose: quick checks first */
+  kind?: "review" | "diagnose";
   suggestion: string;
-  rootStandardId: string;
-  rootLabel: string;
+  rootStandardId: string | null;
+  rootLabel: string | null;
+  /** diagnose: direct prerequisites without data */
+  checkLabels?: string[];
   targetStandardId: string;
   targetLabel: string;
-  /** representative LC of the root standard (used for study tools) */
+  /** representative LC (root LC for review, first probe LC for diagnose) */
   rootLcId: string | null;
   depth: number;
   /** "real" = Learning Commons KG path; "heuristic" = same domain, lower grade */
   dataSource: "real" | "heuristic";
-  rootState: "mastered" | "gap" | "learning" | "insufficient";
+  rootState: "mastered" | "gap" | "learning" | "insufficient" | null;
   diagnostics: Array<{ lcId: string; skill: string; prompt: string }>;
 };
 

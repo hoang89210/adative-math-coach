@@ -5,13 +5,15 @@ import { posteriorsFromTallies, type BetaParams } from "@/lib/lc-mastery";
 import { buildLcMasteryReport } from "@/lib/lc-mastery-report";
 import { isValidLearnerId, loadLcMastery } from "@/lib/lc-mastery-store";
 import { logError } from "@/lib/log-safe";
+import { verifyLearnerToken } from "@/lib/learner-token";
 import { isValidSessionRef, loadMastery, resolveSessionId } from "@/lib/mastery";
 
 export const maxDuration = 30;
 
 /**
  * POST /api/mastery
- *   { learnerId }            -> learner's cumulative LC mastery (/progress)
+ *   { learnerId, learnerToken } -> learner's cumulative LC mastery (/progress);
+ *                               token from /api/learners create/login
  *   { sessionId | code }     -> mastery for that session (/results, /teacher):
  *                               the linked learner's cumulative posteriors when
  *                               the session belongs to a learner, else the
@@ -23,6 +25,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await readJsonBody(request, 8 * 1024)) as {
       learnerId?: unknown;
+      learnerToken?: unknown;
       sessionId?: unknown;
       code?: unknown;
       jurisdiction?: unknown;
@@ -41,6 +44,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "invalid learnerId" }, { status: 400 });
       }
       const learnerId = body.learnerId.trim();
+      // a bare learnerId is not enough to read cumulative mastery
+      const check = verifyLearnerToken(learnerId, body.learnerToken);
+      if (!check.ok) {
+        return NextResponse.json(
+          {
+            error: "Please sign in again with your learner code and PIN.",
+            reason: check.reason,
+          },
+          { status: 401 },
+        );
+      }
       const loaded = await loadLcMastery(learnerId);
       posteriors = loaded.posteriors;
       store = loaded.source;
