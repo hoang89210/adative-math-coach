@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useMemo, useState } from "react";
+import { LcMasterySection } from "@/components/LcMasterySection";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { StandardCategoryPicker } from "@/components/StandardCategoryPicker";
 import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
@@ -383,6 +384,15 @@ function TeacherPageInner() {
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
+      )}
+
+      {session && (
+        <LcMasterySection
+          key={session.sessionId}
+          request={{ sessionId: session.sessionId }}
+          title="Mastery heatmap (standard → learning component)"
+          aggregationNote="Aggregates ALL diagnostic sessions of this learner (not only the session code above). Cells and root gaps use the learner's cumulative answers."
+        />
       )}
 
       {session && (

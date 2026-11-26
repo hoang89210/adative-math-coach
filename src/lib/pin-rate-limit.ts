@@ -102,11 +102,20 @@ async function ensureRateLimitTable(): Promise<boolean> {
 
   tableReady = (async () => {
     try {
-      await withTimeout(
-        dbQuery(ENSURE_TABLE_SQL),
+      // Existence check first: a runtime role without CREATE on the schema
+      // fails `create table if not exists` even when the table exists.
+      const { rows } = await withTimeout(
+        dbQuery<{ t: string | null }>(`select to_regclass('amc_rate_limits')::text as t`),
         RATE_LIMIT_QUERY_TIMEOUT_MS,
-        "ensureRateLimitTable",
+        "checkRateLimitTable",
       );
+      if (!rows[0]?.t) {
+        await withTimeout(
+          dbQuery(ENSURE_TABLE_SQL),
+          RATE_LIMIT_QUERY_TIMEOUT_MS,
+          "ensureRateLimitTable",
+        );
+      }
       tableReadyOk = true;
       return true;
     } catch (err) {
@@ -278,4 +287,24 @@ export async function clearPinLoginFailures(
   await Promise.all([dbClear(ipKey), dbClear(codeKey)]);
   clearMemoryFailures(ipKey);
   clearMemoryFailures(codeKey);
+}
+
+/**
+ * Generic request counter on the same infrastructure (amc_rate_limits table
+ * shared across isolates, in-memory fallback, same 15-minute window
+ * `PIN_LOGIN_WINDOW_MS`). Used to throttle evidence writes
+ * (/api/diagnostic/grade). If ANY bucket is already at its limit the request
+ * is refused and nothing is counted; otherwise every bucket is incremented.
+ * Keys are namespaced by the caller (e.g. `grade:ip:...`) so they never
+ * collide with PIN-login keys.
+ */
+export async function consumeRequestRateLimit(
+  buckets: Array<{ key: string; max: number }>,
+): Promise<PinRateLimitResult> {
+  const checks = await Promise.all(buckets.map((b) => checkOne(b.key, b.max)));
+  const combined = combineRateLimitResults(...checks);
+  if (combined.limited) return combined;
+  await Promise.all(buckets.map((b) => dbRecordFailure(b.key)));
+  for (const b of buckets) recordMemoryFailure(b.key, Date.now(), b.max);
+  return combined;
 }

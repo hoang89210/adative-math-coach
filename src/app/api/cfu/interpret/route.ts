@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 import { getCachedCfu, loadMastery } from "@/lib/mastery";
 import { matchCfuRoute } from "@/lib/skills/cfu";
 import type { CfuInterpretation } from "@/lib/types/skills";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       componentId?: string;
       answers?: Array<{ itemId: string; answer: string }>;
@@ -59,9 +60,6 @@ export async function POST(request: NextRequest) {
       interpretations,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 }

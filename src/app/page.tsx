@@ -13,6 +13,7 @@ export default function Home() {
   const [grade, setGrade] = useState("4");
   const [jurisdiction, setJurisdiction] = useState("Multi-State");
   const [learnerId, setLearnerId] = useState<string | null>(null);
+  const [learnerToken, setLearnerToken] = useState<string | null>(null);
   const [learnerCode, setLearnerCode] = useState("");
   const [learnerPin, setLearnerPin] = useState("");
   const [learnerMsg, setLearnerMsg] = useState<string | null>(null);
@@ -61,6 +62,7 @@ export default function Home() {
         }),
       );
       if (learnerId) sessionStorage.setItem("learnerId", learnerId);
+      if (learnerToken) sessionStorage.setItem("learnerToken", learnerToken);
       if (learnerCode) sessionStorage.setItem("learnerCode", learnerCode);
       router.push("/test");
     } catch (err) {
@@ -199,6 +201,7 @@ export default function Home() {
                   const j = await res.json();
                   if (!res.ok) throw new Error(apiErrorMessage(j, "Create failed"));
                   setLearnerId(j.learnerId);
+                  setLearnerToken(j.learnerToken ?? null);
                   setLearnerCode(j.publicCode);
                   setLearnerMsg(
                     `Save your code ${j.publicCode} and PIN — needed to continue later.`,
@@ -236,6 +239,7 @@ export default function Home() {
                   const j = await res.json();
                   if (!res.ok) throw new Error(apiErrorMessage(j, "Login failed"));
                   setLearnerId(j.learnerId);
+                  setLearnerToken(j.learnerToken ?? null);
                   setLearnerCode(j.publicCode);
                   setLearnerMsg(`Signed in as ${j.publicCode}`);
                 } catch (e) {

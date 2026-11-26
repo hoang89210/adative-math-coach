@@ -1,4 +1,5 @@
 import { withLlmRequestKey } from "@/lib/llm";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -19,7 +20,7 @@ import {
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       componentId?: string;
       action?: "start" | "turn" | "finalize";
@@ -92,10 +93,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

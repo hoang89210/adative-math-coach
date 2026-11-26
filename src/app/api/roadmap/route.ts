@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, readJsonBody } from "@/lib/api-errors";
 
 export const maxDuration = 60;
 import { getComponentsByIds } from "@/lib/data/learning-components";
@@ -10,7 +11,100 @@ import { callLlmJson, hasLlmKey, withLlmRequestKey } from "@/lib/llm";
 import { logError } from "@/lib/log-safe";
 
 import { loadMastery, updateMasteryRoadmap } from "@/lib/mastery";
-import type { CoachPriority, Roadmap } from "@/lib/types/quiz";
+import { analyzeRootGaps } from "@/lib/data/prereq-graph";
+import { type BetaParams, posteriorsFromTallies } from "@/lib/lc-mastery";
+import { isValidLearnerId, loadLcMastery } from "@/lib/lc-mastery-store";
+import type { CoachPriority, FoundationStep, Roadmap } from "@/lib/types/quiz";
+
+/**
+ * Root-gap foundations: prepend "Ôn nền tảng" (review) or "Kiểm tra nhanh"
+ * (diagnose, when earlier skills have no data) steps to the plan. Uses the
+ * learner's cumulative LC posteriors when the session has a learner, else
+ * this session's evidence. Never throws (plan still works without it).
+ */
+async function withFoundations(
+  roadmap: Roadmap,
+  session: { learnerId?: string; jurisdiction?: string; grade?: string; result: { byComponent: Array<{ componentId: string; correct: number; total: number }> } },
+): Promise<Roadmap> {
+  try {
+    let posteriors = new Map<string, BetaParams>();
+    if (session.learnerId && isValidLearnerId(session.learnerId)) {
+      posteriors = (await loadLcMastery(session.learnerId)).posteriors;
+    }
+    if (posteriors.size === 0) {
+      posteriors = posteriorsFromTallies(session.result.byComponent);
+    }
+    const reports = analyzeRootGaps({
+      posteriors,
+      jurisdiction: session.jurisdiction,
+      grade: session.grade,
+      maxReports: 2,
+    });
+    if (!reports.length) return { ...roadmap, foundations: [] };
+    const foundations: FoundationStep[] = reports.map((r) => ({
+      kind: r.kind,
+      suggestion: r.suggestion,
+      rootStandardId: r.root?.standardId ?? null,
+      rootLabel: r.root?.label ?? null,
+      checkLabels: r.checkPrereqs.map((c) => c.label),
+      targetStandardId: r.target.standardId,
+      targetLabel: r.target.label,
+      rootLcId: r.root?.lcId ?? r.diagnostics[0]?.lcId ?? null,
+      depth: r.depth,
+      dataSource: r.dataSource,
+      rootState: r.root?.state ?? null,
+      diagnostics: r.diagnostics.map((d) => ({
+        lcId: d.lcId,
+        skill: d.skill,
+        prompt: d.prompt,
+      })),
+    }));
+    const existing = roadmap.priorities ?? [];
+    const have = new Set(existing.map((p) => p.componentId));
+    const source = (f: FoundationStep) =>
+      f.dataSource === "heuristic"
+        ? " (prerequisite guessed by heuristic: same domain, lower grade)"
+        : " (Learning Commons progression)";
+    const extra: CoachPriority[] = foundations
+      .filter((f) => f.rootLcId && !have.has(f.rootLcId))
+      .map((f) =>
+        f.kind === "review"
+          ? {
+              order: 0,
+              componentId: f.rootLcId!,
+              skill: f.suggestion,
+              whyNow: `Nearest earlier skill with a gap, ${f.depth} step(s) below ${f.targetLabel}${source(f)}. Fixing the foundation first makes the later skill easier.`,
+              masteryLooksLike: `You can solve ${f.rootLabel} problems correctly without hints (≥70% over at least 3 answers), then return to ${f.targetLabel}.`,
+              studyMoves: [
+                "Review one worked example of the foundation skill.",
+                "Do 2–3 short problems on it before going back to the harder skill.",
+              ],
+              dependsOn: [],
+              priority: "high" as const,
+              standardCodes: f.rootLabel ? [f.rootLabel] : [],
+            }
+          : {
+              order: 0,
+              componentId: f.rootLcId!,
+              skill: f.suggestion,
+              whyNow: `No answers yet on the skills right before ${f.targetLabel}${source(f)}. A quick check tells us whether to review them first.`,
+              masteryLooksLike: "You answer the quick checks correctly without hints.",
+              studyMoves: f.diagnostics.map((d) => d.prompt).slice(0, 3),
+              dependsOn: [],
+              priority: "high" as const,
+              standardCodes: f.checkLabels ?? [],
+            },
+      );
+    const priorities = [...extra, ...existing].map((p, i) => ({
+      ...p,
+      order: i + 1,
+    }));
+    return { ...roadmap, foundations, priorities };
+  } catch (err) {
+    logError("root-gap foundations failed", err);
+    return roadmap;
+  }
+}
 
 type LlmCoachPlan = {
   summary?: string;
@@ -103,7 +197,7 @@ function buildLocalCoachPlan(input: {
 export async function POST(request: NextRequest) {
   return withLlmRequestKey(request, async () => {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       sessionId?: string;
       refresh?: boolean;
     };
@@ -276,13 +370,11 @@ Rules:
       }
     }
 
+    roadmap = await withFoundations(roadmap, session);
     await updateMasteryRoadmap(sessionId, roadmap);
     return NextResponse.json({ sessionId, roadmap });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 });
 }

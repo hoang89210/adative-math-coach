@@ -160,4 +160,4 @@ export async function resolveSessionId(input: string): Promise<string | null> {
   return storeResolveSessionId(input);
 }
 
-export { sessionShortCode } from "./mastery-codes";
+export { isValidSessionRef, sessionShortCode } from "./mastery-codes";

@@ -27,14 +27,39 @@ npm run build:catalog   # if standards-catalog.json missing
 | `SERVER_TEST_KEY_WINDOW_MS` | no | Window for that cap in ms (default `3600000` = 1 hour) |
 | `BLOB_READ_WRITE_TOKEN` | optional | only if not using Supabase for sessions |
 | `POSTGRES_URL` / `POSTGRES_PRISMA_URL` / `DATABASE_URL` | **yes on prod** | from Vercel ↔ Supabase Connect |
+| `AMC_LEARNER_TOKEN_SECRET` | optional | HMAC secret for learner ownership tokens (issued on learner create / PIN login, required to save diagnostic evidence and read `/api/mastery` by learnerId). If unset, a key is derived (HKDF) from the database URL, so rotating the DB password signs everyone out (they log in again with code + PIN). Never logged. |
 
 Users can paste an OpenAI key in the yellow **API key** panel (stored in browser `localStorage` only, sent as `x-openai-api-key`). Health: `env.hasOpenAiKey` means the server has `OPENAI_API_KEY` configured (not that it can be used without a header); `acceptsUserApiKey` means clients may send their own key; `serverTestKeyEnabled` means the test button is available; `serverKeyFallbackEnabled` is true only when `ALLOW_SERVER_KEY_FALLBACK=1` and a server key exist.
 
 ### Supabase sessions
 
 1. Connect Supabase to the Vercel project (injects `POSTGRES_*`).
-2. Run `supabase/migrations/001_amc_sessions_learners.sql` in Supabase SQL Editor.
+2. Run `supabase/migrations/001_amc_sessions_learners.sql` in Supabase SQL Editor (then `002_amc_rate_limits.sql` and `003_amc_lc_mastery.sql`; all are idempotent, and the app also runs `CREATE TABLE IF NOT EXISTS` for 002/003 on first use).
 3. Redeploy. Health should show `sessionStore: "supabase"` and `dbOk: true`.
+
+### Before merging the skill-mastery PR (#4) — production DB checklist
+
+On the shared DB the app connects as the role `amc_app`; do not rely on the
+app's own `CREATE TABLE IF NOT EXISTS` (a restricted role may lack DDL rights,
+and a table created by another role is not readable by `amc_app` without a
+grant). **Before merge**, on the production/shared database:
+
+1. Run `supabase/migrations/003_amc_lc_mastery.sql` (creates `amc_lc_mastery`).
+2. Grant the runtime role access. The migration now does this itself in a
+   guarded, idempotent block (skipped when `amc_app` does not exist):
+   ```sql
+   do $$ begin
+     if exists (select 1 from pg_roles where rolname = 'amc_app') then
+       grant select, insert, update, delete on table amc_lc_mastery to amc_app;
+     end if;
+   end $$;
+   ```
+3. `amc_app` also needs select/insert/update/delete on `amc_rate_limits`
+   (already required for PIN login; diagnostic grading now uses the same
+   table for submission throttling).
+
+Status: Sa already ran 003 and the GRANT on the shared DB. Re-running the
+migration is safe.
 
 ## Deploy with CLI
 

@@ -40,7 +40,7 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
 1. `GET {BASE_URL}/api/health` trả HTTP 200, `ok: true`, `okContent: true`.
 2. Nếu `env.sessionStore === "supabase"`: **`okDb === true`** (`env.dbOk === true`). Helper `assertDbReady()` chặn chạy nếu `okDb !== true`.
 3. Có `OPENAI_API_KEY` hợp lệ trong env (`sk-…`, ≥ 20 ký tự), hoặc `serverTestKeyEnabled === true` nếu test luồng server key.
-4. Trên Supabase đã chạy đủ `001_amc_sessions_learners.sql` và `002_amc_rate_limits.sql`.
+4. Trên Supabase đã chạy đủ `001_amc_sessions_learners.sql`, `002_amc_rate_limits.sql` và `003_amc_lc_mastery.sql`.
 
 ---
 
@@ -67,6 +67,35 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
 - **Hung DB:** Khi Postgres không phản hồi quá `DB_CONNECT_TIMEOUT_MS` / `DB_QUERY_TIMEOUT_MS`:
   - `GET /api/health` → `ok: false`, `okContent: true`, `okDb: false`, `dbError` không chứa URI/password.
   - `POST /api/learners` login → **503** + `Retry-After` (và request tiếp theo trong `DB_FAIL_BACKOFF_MS` fail-fast ngay với **503** + `Retry-After`).
+
+### (c2) DB down / input validation (`PR #4`, QA round 1)
+- Chọn **503 + `Retry-After`** thống nhất khi DB không kết nối được / treo (giống learner create/login):
+  - `POST /api/diagnostic/grade` → **503** + `Retry-After` (session không lưu được nên không trả 200 giả).
+  - `POST /api/mastery {code}` và `GET /api/teacher/session?code=` → **503** + `Retry-After` (không còn 404 "session not found" giả).
+  - Mọi route dùng `errorResponse()` (roadmap, study-sheet, cfu, journey, teacher/*…) cũng trả 503 khi DB timeout.
+- Code không đúng định dạng (vd `ZZZZZZZZ`, không phải hex ≥ 8 ký tự / UUID) → **400** "session not found — invalid code format…" ngay, **không** query DB.
+- JSON hỏng → **400** `{"error":"Invalid JSON body"}` (không lộ message parser); body > giới hạn → **413** (grade 128 KB, mastery 8 KB, khác 256 KB).
+- Grade: `learnerId` phải là UUID **và tồn tại** (không thì 400/404); ≤ 30 câu, ≤ 4 LC/câu, LC id lạ bị bỏ (trả `lcIdsDropped`), ≤ 16 LC khác nhau/lần chấm.
+
+### (c3) QA round 2 + thay đổi thiết kế (`PR #4`)
+- **Ngưỡng:** mastered = mean ≥ **0.7** và n ≥ 3 (3/3, 4/5 là mastered); gap = (mean < 0.5 và n ≥ 2) **hoặc** (n ≥ 1 và không câu nào đúng). UI ghi rõ: "Mastered: ≥70% with ≥3 answers · Gap: <50% with ≥2, or every answer wrong."
+- **Chuẩn chính (primary):** chỉ CCSS (Multi-State) hoặc bang của chính learner. Learner Multi-State **không bao giờ** thấy mã bang khác (vd Oregon `4.GM.*`) ở heatmap hay root gap. LC chỉ có chuẩn bang → dùng CCSS qua `hasStandardAlignment`; không có → nhóm "Skills without a CCSS (or your state's) standard".
+- **Root gap:** cạnh KG thật trước, tối đa **1** bước heuristic, không xuống quá **2 lớp** dưới chuẩn đích; chọn tiên quyết **gần nhất có dữ liệu và đang gap** → "Ôn nền tảng: X trước khi tiếp Y". Nếu tiên quyết trực tiếp chưa có dữ liệu → "Kiểm tra nhanh nền tảng: A, B trước khi tiếp Y" + 2–3 câu kiểm tra nhanh, **không** có chữ "Ôn".
+- **Sở hữu learner:** create/login trả `learnerToken` (HMAC, 7 ngày, lưu sessionStorage). Grade chỉ ghi evidence khi token hợp lệ; thiếu/sai token → vẫn chấm nhưng `learnerLinked:false` + cảnh báo trên /results. `/api/mastery {learnerId}` thiếu/sai token → **401**.
+- **Rate limit grade** (bảng `amc_rate_limits`, fallback memory, cửa sổ 15 phút): 60 lần/IP, 30 lần/learner → **429 + Retry-After**.
+- **Bug 6:** mã ngắn hợp lệ (vd `CF0F8624`) chỉ dùng truy vấn prefix, không bao giờ `::uuid` → không còn "invalid input syntax for type uuid" trong log Postgres.
+- **/teacher:** có ghi chú "Aggregates ALL diagnostic sessions of this learner…".
+- **Migration 003:** có khối `DO` cấp quyền cho `amc_app` (bỏ qua nếu role không tồn tại). App kiểm tra `to_regclass()` trước, chỉ `CREATE TABLE` khi bảng chưa có (role không có quyền CREATE vẫn dùng được DB).
+- **Điểm retest cho Nga:**
+  1. Learner Multi-State lớp 4, làm 2 bài → /progress: không có `4.GM.*`; dòng heatmap là 4.MD/4.G/4.OA/4.NF.
+  2. 1 câu sai duy nhất trên một LC → ô đó "Gap"; 4/5 đúng → "Mastered".
+  3. Root gap: sai cả kỹ năng và tiên quyết trực tiếp → "Ôn nền tảng: <tiên quyết>"; tiên quyết chưa làm → "Kiểm tra nhanh…", không "Ôn"; không gợi ý chuẩn thấp hơn quá 2 lớp.
+  4. Gửi grade với `learnerId` của người khác (không token / token của learner khác) → 200, `learnerLinked:false`, không có dòng nào trong `amc_lc_mastery` cho learner đó.
+  5. Gửi 31 lần grade có token cùng learner trong 15 phút → lần 31 = 429 + `Retry-After`.
+  6. `/api/mastery {learnerId}` không token → 401; có token (đăng nhập lại /progress) → 200.
+  7. Mở /teacher bằng mã ngắn → thấy ghi chú tổng hợp; log Postgres không có lỗi uuid.
+  8. DB down/treo → grade, mastery {code}, teacher → 503 + `Retry-After`; JSON hỏng → 400.
+  9. Learner đã đăng nhập từ trước khi deploy (chưa có token) → bài làm không được lưu cho tới khi đăng nhập lại (có cảnh báo).
 
 ### (d) Diagnostic Submit → `amc_sessions` & Teacher session code (`RUN_E2E=1`)
 - Grade 4 diagnostic trên `/` → trả lời 7 câu trên `/test` → Submit → `/results` hiện `Code XXXXXXXX` → `GET /api/teacher/session?sessionId=<code>` trả 200 → mở `/teacher` bằng code khớp snapshot.

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse } from "@/lib/api-errors";
 import { listStandards } from "@/lib/standards/catalog";
 
 export async function GET(request: NextRequest) {
@@ -27,9 +28,6 @@ export async function GET(request: NextRequest) {
       standards,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+    return errorResponse(err);
   }
 }

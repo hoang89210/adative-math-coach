@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { HttpError, errorResponse, readJsonBody } from "@/lib/api-errors";
 import {
   createLearner,
   findLearnerByCode,
@@ -7,6 +8,7 @@ import {
 } from "@/lib/learners";
 import { dbFailFastResponseInit, isDbTimeoutError } from "@/lib/db/client";
 import { sanitizeDbError } from "@/lib/sanitize-error";
+import { issueLearnerToken } from "@/lib/learner-token";
 import {
   checkPinLoginLimits,
   clearPinLoginFailures,
@@ -26,7 +28,7 @@ function rateLimitResponse(retryAfterSec: number) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as {
+    const body = (await readJsonBody(request)) as {
       action?: "create" | "login" | "lookup";
       pin?: string;
       code?: string;
@@ -43,6 +45,7 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({
         learnerId: profile.id,
+        learnerToken: issueLearnerToken(profile.id),
         publicCode: profile.publicCode,
         pin,
         view: publicLearnerView(profile),
@@ -72,6 +75,7 @@ export async function POST(request: NextRequest) {
       await clearPinLoginFailures(ip, code);
       return NextResponse.json({
         learnerId: profile.id,
+        learnerToken: issueLearnerToken(profile.id),
         publicCode: profile.publicCode,
         view: publicLearnerView(profile),
       });
@@ -90,6 +94,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 });
   } catch (err) {
+    if (err instanceof HttpError) return errorResponse(err);
     if (isDbTimeoutError(err)) {
       return NextResponse.json(
         { error: sanitizeDbError(err) || "Request failed" },
