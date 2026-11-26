@@ -40,7 +40,7 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
 1. `GET {BASE_URL}/api/health` trả HTTP 200, `ok: true`, `okContent: true`.
 2. Nếu `env.sessionStore === "supabase"`: **`okDb === true`** (`env.dbOk === true`). Helper `assertDbReady()` chặn chạy nếu `okDb !== true`.
 3. Có `OPENAI_API_KEY` hợp lệ trong env (`sk-…`, ≥ 20 ký tự), hoặc `serverTestKeyEnabled === true` nếu test luồng server key.
-4. Trên Supabase đã chạy đủ `001_amc_sessions_learners.sql` và `002_amc_rate_limits.sql`.
+4. Trên Supabase đã chạy đủ `001_amc_sessions_learners.sql`, `002_amc_rate_limits.sql` và `003_amc_lc_mastery.sql`.
 
 ---
 

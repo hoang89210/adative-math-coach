@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
+import { LcMasterySection } from "@/components/LcMasterySection";
 import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
 import type {
   CoachPriority,
@@ -488,6 +489,12 @@ export default function ResultsPage() {
           </Link>
         </section>
       )}
+
+      <LcMasterySection
+        request={{ sessionId: data.sessionId }}
+        showHeatmap={false}
+        showRootGaps
+      />
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">Skill breakdown</h2>

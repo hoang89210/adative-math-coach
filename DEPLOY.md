@@ -33,7 +33,7 @@ Users can paste an OpenAI key in the yellow **API key** panel (stored in browser
 ### Supabase sessions
 
 1. Connect Supabase to the Vercel project (injects `POSTGRES_*`).
-2. Run `supabase/migrations/001_amc_sessions_learners.sql` in Supabase SQL Editor.
+2. Run `supabase/migrations/001_amc_sessions_learners.sql` in Supabase SQL Editor (then `002_amc_rate_limits.sql` and `003_amc_lc_mastery.sql`; all are idempotent, and the app also runs `CREATE TABLE IF NOT EXISTS` for 002/003 on first use).
 3. Redeploy. Health should show `sessionStore: "supabase"` and `dbOk: true`.
 
 ## Deploy with CLI

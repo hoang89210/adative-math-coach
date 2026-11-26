@@ -1,17 +1,26 @@
 import fs from "fs";
 import path from "path";
 
-type ProgressionIndex = {
+export type ProgressionIndex = {
+  version?: number;
   builtAt: string;
+  /** v2: ids are math-index standard ids (caseIdentifierUUID) */
+  idSpace?: string;
+  source?: string;
   edgeCount: number;
+  alignmentCount?: number;
   buildsTowards: Record<string, string[]>;
   /** standardId -> list of prerequisite standard ids (sources that build towards it) */
   prerequisitesOf: Record<string, string[]>;
+  /** v2: state standard id -> aligned CCSS standard ids that are in the progression */
+  alignedToCcss?: Record<string, string[]>;
+  /** v2: CCSS standard id -> statement code */
+  codes?: Record<string, string>;
 };
 
 let cached: ProgressionIndex | null = null;
 
-function loadProgression(): ProgressionIndex | null {
+export function loadProgression(): ProgressionIndex | null {
   if (cached) return cached;
   const p = path.join(process.cwd(), "data", "progression-index.json");
   if (!fs.existsSync(p)) return null;

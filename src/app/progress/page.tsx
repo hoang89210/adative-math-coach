@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { LcMasterySection } from "@/components/LcMasterySection";
 
 export default function ProgressPage() {
   const [code, setCode] = useState(
@@ -34,6 +35,7 @@ export default function ProgressPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [learnerId, setLearnerId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -47,10 +49,12 @@ export default function ProgressPage() {
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "Failed");
       setView(j.view);
+      setLearnerId(j.learnerId);
       sessionStorage.setItem("learnerId", j.learnerId);
       sessionStorage.setItem("learnerCode", j.publicCode);
     } catch (e) {
       setView(null);
+      setLearnerId(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -110,6 +114,13 @@ export default function ProgressPage() {
               {view.emerging}
             </p>
           </div>
+
+          {learnerId && (
+            <LcMasterySection
+              request={{ learnerId }}
+              storageKey={`amc.lcMastery.v1.${learnerId}`}
+            />
+          )}
 
           <div className="rounded-2xl border border-zinc-200 bg-white p-5">
             <h2 className="font-semibold">Coverage history</h2>

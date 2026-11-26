@@ -116,3 +116,53 @@ export function pickComponentsForDiagnostic(
   }
   return top.slice(0, count).map((x) => x.c);
 }
+
+export type StandardIndexEntry = {
+  id: string;
+  code: string | null;
+  description: string;
+  gradeLevel: string[];
+  jurisdiction: string;
+  /** LCs that `supports` this standard (math-index) */
+  lcIds: string[];
+};
+
+type StandardIndex = {
+  standards: Map<string, StandardIndexEntry>;
+  components: Map<string, LearningComponent>;
+};
+
+let cachedStandardIndex: StandardIndex | null = null;
+
+/**
+ * Reverse index over math-index.json: standard -> supporting LCs, and
+ * LC id -> component (all grades). Built once per server instance.
+ */
+export function getStandardIndex(): StandardIndex {
+  if (cachedStandardIndex) return cachedStandardIndex;
+  const index = loadIndex();
+  const standards = new Map<string, StandardIndexEntry>();
+  const components = new Map<string, LearningComponent>();
+  for (const list of Object.values(index.byGrade)) {
+    for (const c of list) {
+      if (!components.has(c.id)) components.set(c.id, c);
+      for (const s of c.relatedStandards) {
+        let e = standards.get(s.id);
+        if (!e) {
+          e = {
+            id: s.id,
+            code: s.code ?? null,
+            description: s.description,
+            gradeLevel: s.gradeLevel ?? [],
+            jurisdiction: s.jurisdiction || "Multi-State",
+            lcIds: [],
+          };
+          standards.set(s.id, e);
+        }
+        if (!e.lcIds.includes(c.id)) e.lcIds.push(c.id);
+      }
+    }
+  }
+  cachedStandardIndex = { standards, components };
+  return cachedStandardIndex;
+}

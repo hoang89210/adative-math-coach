@@ -6,6 +6,8 @@ import { logEvent } from "@/lib/events";
 import { logError } from "@/lib/log-safe";
 
 import { mergeDiagnosticIntoLearner } from "@/lib/learners";
+import { deltasFromObservations, type ItemObservation } from "@/lib/lc-mastery";
+import { isValidLearnerId, recordLcEvidence } from "@/lib/lc-mastery-store";
 import { saveMastery } from "@/lib/mastery";
 import type {
   AnswerSubmission,
@@ -81,12 +83,20 @@ export async function POST(request: NextRequest) {
     }
 
     const tallies = new Map<string, { correct: number; total: number }>();
+    const observations: ItemObservation[] = [];
     let score = 0;
 
     for (const q of questions) {
       const userAnswer = answerMap.get(q.id) ?? "";
       const ok = isCorrect(q, userAnswer);
       if (ok) score += 1;
+      const extraIds = Array.isArray(q.target_component_ids)
+        ? q.target_component_ids.map(String).slice(0, 8)
+        : [];
+      observations.push({
+        lcIds: [q.target_component_id, ...extraIds].filter(Boolean),
+        correct: ok,
+      });
       const t = tallies.get(q.target_component_id) ?? {
         correct: 0,
         total: 0,
@@ -153,6 +163,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: message }, { status: 500 });
     }
 
+    // LC Beta posteriors (our own statistics; Postgres with in-memory fallback)
+    let lcMasteryStore: "db" | "memory" | "skipped" = "skipped";
+    if (learnerId && isValidLearnerId(learnerId)) {
+      try {
+        lcMasteryStore = await recordLcEvidence(
+          learnerId,
+          deltasFromObservations(observations),
+        );
+      } catch (err) {
+        logError("lc mastery update failed", err);
+      }
+    }
+
     if (learnerId) {
       try {
         await mergeDiagnosticIntoLearner({
@@ -176,7 +199,7 @@ export async function POST(request: NextRequest) {
       meta: { percent: result.percent, total: result.total },
     });
 
-    return NextResponse.json({ sessionId, result, coverage });
+    return NextResponse.json({ sessionId, result, coverage, lcMasteryStore });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await logEvent({ kind: "diagnostic_grade", ok: false, message });
