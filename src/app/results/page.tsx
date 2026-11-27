@@ -1,11 +1,13 @@
 "use client";
 
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ApiKeyPanel } from "@/components/ApiKeyPanel";
 import { LcMasterySection } from "@/components/LcMasterySection";
 import { apiErrorMessage, apiFetch } from "@/lib/client-api-key";
+import { LEARNER_NOT_SAVED_TEXT } from "@/lib/learner-not-saved";
 import type {
   CoachPriority,
   GradeResult,
@@ -328,9 +330,7 @@ export default function ResultsPage() {
             className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
             data-testid="learner-not-saved"
           >
-            This result was not added to your learner progress because your sign-in
-            could not be verified. Sign in again with your learner code and PIN before
-            the next test.
+            {LEARNER_NOT_SAVED_TEXT}
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2 pt-2">

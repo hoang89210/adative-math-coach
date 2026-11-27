@@ -12,6 +12,7 @@ import {
   filterEvidenceLcIds,
   validateGradeBody,
 } from "@/lib/grade-input";
+import { isDbTimeoutError } from "@/lib/db/client";
 import { logError } from "@/lib/log-safe";
 import { sanitizeDbError } from "@/lib/sanitize-error";
 
@@ -193,7 +194,11 @@ export async function POST(request: NextRequest) {
       return errorResponse(err);
     }
 
-    // LC Beta posteriors (our own statistics; Postgres with in-memory fallback)
+    // LC Beta posteriors (our own statistics). Memory fallback only when
+    // no DB is configured; a configured-but-down DB throws and becomes
+    // 503 + Retry-After (same as session save). The common outage path
+    // already 503s earlier (saveMastery / loadLearnerById); this covers
+    // the rarer case where the session wrote but amc_lc_mastery did not.
     let lcMasteryStore: "db" | "memory" | "skipped" = "skipped";
     let lcIdsDropped = 0;
     if (learnerId) {
@@ -206,6 +211,7 @@ export async function POST(request: NextRequest) {
           deltasFromObservations(filtered.observations),
         );
       } catch (err) {
+        if (isDbTimeoutError(err)) return errorResponse(err);
         logError("lc mastery update failed", err);
       }
     }
