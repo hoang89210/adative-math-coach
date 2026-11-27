@@ -55,7 +55,7 @@ const q = (id: string, lc: string, extra?: string[]) => ({
 });
 
 describe("grade route — learner binding and LC validation (no DB)", () => {
-  test("random learner UUID without a token -> graded but NOT linked, nothing recorded", async () => {
+  test("item 4: nonexistent learnerId without a token -> 200 unlinked (do not leak existence)", async () => {
     const ghost = "0b9a4c1e-7d3f-4a2b-9c8d-112233445566";
     const res = await grade.POST(
       post("/api/diagnostic/grade", {
@@ -73,7 +73,7 @@ describe("grade route — learner binding and LC validation (no DB)", () => {
     assert.equal((await store.loadLcMastery(ghost)).posteriors.size, 0);
   });
 
-  test("random learner UUID with a validly signed token -> 404 (learner must exist)", async () => {
+  test("item 4: nonexistent learnerId with a valid token -> 404 (existence only after proof)", async () => {
     const ghost = "0b9a4c1e-7d3f-4a2b-9c8d-112233445567";
     const res = await grade.POST(
       post("/api/diagnostic/grade", {

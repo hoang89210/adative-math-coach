@@ -4,6 +4,7 @@ import { loadLearnerById } from "@/lib/learners";
 import { posteriorsFromTallies, type BetaParams } from "@/lib/lc-mastery";
 import { buildLcMasteryReport } from "@/lib/lc-mastery-report";
 import { isValidLearnerId, loadLcMastery } from "@/lib/lc-mastery-store";
+import { isDbTimeoutError } from "@/lib/db/client";
 import { logError } from "@/lib/log-safe";
 import { verifyLearnerToken } from "@/lib/learner-token";
 import { isValidSessionRef, loadMastery, resolveSessionId } from "@/lib/mastery";
@@ -55,15 +56,20 @@ export async function POST(request: NextRequest) {
           { status: 401 },
         );
       }
+      // loadLcMastery throws when a DB is configured but down -> 503
       const loaded = await loadLcMastery(learnerId);
       posteriors = loaded.posteriors;
       store = loaded.source;
-      // grade / jurisdiction steer the primary-standard choice; best effort
+      // grade / jurisdiction steer the primary-standard choice
       try {
         const learner = await loadLearnerById(learnerId);
         grade = learner?.currentGrade;
         jurisdiction = jurisdiction || learner?.jurisdiction;
       } catch (err) {
+        // a down DB should already have thrown from loadLcMastery; if the
+        // profile lookup fails the same way, do not return a 200 with a
+        // possibly wrong jurisdiction / grade.
+        if (isDbTimeoutError(err)) throw err;
         logError("mastery: learner profile load failed", err);
       }
     } else {

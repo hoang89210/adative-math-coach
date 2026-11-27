@@ -10,11 +10,14 @@ import { logError } from "@/lib/log-safe";
  * isolate, short per-query timeout, and a backoff after a failure so a down
  * DB is not retried on every request.
  *
- * Fallback (no DB configured / DB failing): an in-memory map per server
- * instance. It is ALWAYS updated too, so a request on the same instance can
- * still read evidence if the DB later fails. Limitation: memory is per
- * isolate and lost on cold start; the client additionally keeps a
- * localStorage snapshot (see /progress) for that case.
+ * Fallback: an in-memory map per server instance, used ONLY when no
+ * database is configured at all. If a database IS configured but is down or
+ * timing out, load/record THROW (isDbTimeoutError) so routes can answer
+ * 503 + Retry-After instead of an empty "memory" report that looks like
+ * the learner has no data. Memory is still updated on a successful path
+ * (and on the no-DB path). Limitation: memory is per isolate and lost on
+ * cold start; the client additionally keeps a localStorage snapshot
+ * (see /progress) for the no-DB case.
  */
 
 export const LC_MASTERY_QUERY_TIMEOUT_MS = 2_000;
@@ -61,7 +64,11 @@ async function ensureTable(): Promise<boolean> {
   if (!dbEnabled()) return false;
   if (tableReadyOk && tableReady) return tableReady;
   if (tableReady) return tableReady;
-  if (Date.now() < nextEnsureAt) return false;
+  if (Date.now() < nextEnsureAt) {
+    // Backoff after a failed ensure: do not return false (that used to
+    // look like "no table / use memory"). The DB is configured.
+    throw new Error("database temporarily unavailable");
+  }
   tableReady = (async () => {
     try {
       // Existence check first: a runtime role without CREATE on the schema
@@ -84,7 +91,10 @@ async function ensureTable(): Promise<boolean> {
       nextEnsureAt = Date.now() + LC_MASTERY_ENSURE_BACKOFF_MS;
       noteDbTimeout(err);
       logError("amc_lc_mastery ensure table failed", err);
-      return false;
+      // DB is configured (we returned earlier if not): never pretend the
+      // table is simply "not ready" — that used to push callers onto the
+      // in-memory fallback and hide the outage.
+      throw err;
     }
   })();
   return tableReady;
@@ -128,9 +138,15 @@ export async function recordLcEvidence(
     (d) => d.lcId && d.lcId.length <= 200 && d.dAlpha >= 0 && d.dBeta >= 0 && d.dAlpha + d.dBeta > 0,
   );
   if (!clean.length) return "skipped";
-  memApply(learnerId, clean);
+  if (!dbEnabled()) {
+    memApply(learnerId, clean);
+    return "memory";
+  }
 
-  if (!(await ensureTable())) return "memory";
+  // DB configured: require a durable write. Memory is updated only after
+  // the upsert succeeds so a retried request cannot read a write that
+  // never reached Postgres.
+  await ensureTable();
   try {
     await withTimeout(
       dbQuery(
@@ -151,6 +167,7 @@ export async function recordLcEvidence(
       LC_MASTERY_QUERY_TIMEOUT_MS,
       "lcMasteryUpsert",
     );
+    memApply(learnerId, clean);
     return "db";
   } catch (err) {
     nextEnsureAt = Date.now() + LC_MASTERY_ENSURE_BACKOFF_MS;
@@ -158,41 +175,12 @@ export async function recordLcEvidence(
     tableReadyOk = false;
     noteDbTimeout(err);
     logError("amc_lc_mastery upsert failed", err);
-    return "memory";
+    throw err;
   }
 }
 
-export async function loadLcMastery(learnerId: string): Promise<LcMasteryLoad> {
+function fromMemory(learnerId: string): LcMasteryLoad {
   const empty: LcMasteryLoad = { source: "memory", posteriors: new Map(), updatedAt: {} };
-  if (!isValidLearnerId(learnerId)) return empty;
-
-  if (await ensureTable()) {
-    try {
-      const { rows } = await withTimeout(
-        dbQuery<{ lc_id: string; alpha: number; beta: number; updated_at: Date | string }>(
-          `select lc_id, alpha, beta, updated_at from amc_lc_mastery
-           where learner_id = $1::uuid order by updated_at desc limit ${MAX_ROWS_PER_LEARNER}`,
-          [learnerId],
-        ),
-        LC_MASTERY_QUERY_TIMEOUT_MS,
-        "lcMasteryLoad",
-      );
-      const posteriors = new Map<string, BetaParams>();
-      const updatedAt: Record<string, string> = {};
-      for (const r of rows) {
-        posteriors.set(r.lc_id, { alpha: Number(r.alpha), beta: Number(r.beta) });
-        updatedAt[r.lc_id] = new Date(r.updated_at).toISOString();
-      }
-      return { source: "db", posteriors, updatedAt };
-    } catch (err) {
-      nextEnsureAt = Date.now() + LC_MASTERY_ENSURE_BACKOFF_MS;
-      tableReady = null;
-      tableReadyOk = false;
-      noteDbTimeout(err);
-      logError("amc_lc_mastery load failed", err);
-    }
-  }
-
   const m = memory.get(learnerId.toLowerCase());
   if (!m) return empty;
   const posteriors = new Map<string, BetaParams>();
@@ -202,4 +190,39 @@ export async function loadLcMastery(learnerId: string): Promise<LcMasteryLoad> {
     updatedAt[lc] = row.updatedAt;
   }
   return { source: "memory", posteriors, updatedAt };
+}
+
+export async function loadLcMastery(learnerId: string): Promise<LcMasteryLoad> {
+  const empty: LcMasteryLoad = { source: "memory", posteriors: new Map(), updatedAt: {} };
+  if (!isValidLearnerId(learnerId)) return empty;
+
+  // Memory fallback is only for deployments with no database configured.
+  if (!dbEnabled()) return fromMemory(learnerId);
+
+  await ensureTable();
+  try {
+    const { rows } = await withTimeout(
+      dbQuery<{ lc_id: string; alpha: number; beta: number; updated_at: Date | string }>(
+        `select lc_id, alpha, beta, updated_at from amc_lc_mastery
+         where learner_id = $1::uuid order by updated_at desc limit ${MAX_ROWS_PER_LEARNER}`,
+        [learnerId],
+      ),
+      LC_MASTERY_QUERY_TIMEOUT_MS,
+      "lcMasteryLoad",
+    );
+    const posteriors = new Map<string, BetaParams>();
+    const updatedAt: Record<string, string> = {};
+    for (const r of rows) {
+      posteriors.set(r.lc_id, { alpha: Number(r.alpha), beta: Number(r.beta) });
+      updatedAt[r.lc_id] = new Date(r.updated_at).toISOString();
+    }
+    return { source: "db", posteriors, updatedAt };
+  } catch (err) {
+    nextEnsureAt = Date.now() + LC_MASTERY_ENSURE_BACKOFF_MS;
+    tableReady = null;
+    tableReadyOk = false;
+    noteDbTimeout(err);
+    logError("amc_lc_mastery load failed", err);
+    throw err;
+  }
 }
