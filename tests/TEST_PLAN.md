@@ -75,7 +75,8 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
   - Mọi route dùng `errorResponse()` (roadmap, study-sheet, cfu, journey, teacher/*…) cũng trả 503 khi DB timeout.
 - Code không đúng định dạng (vd `ZZZZZZZZ`, không phải hex ≥ 8 ký tự / UUID) → **400** "session not found — invalid code format…" ngay, **không** query DB.
 - JSON hỏng → **400** `{"error":"Invalid JSON body"}` (không lộ message parser); body > giới hạn → **413** (grade 128 KB, mastery 8 KB, khác 256 KB).
-- Grade: `learnerId` phải là UUID **và tồn tại** (không thì 400/404); ≤ 30 câu, ≤ 4 LC/câu, LC id lạ bị bỏ (trả `lcIdsDropped`), ≤ 16 LC khác nhau/lần chấm.
+- Grade: `learnerId` nếu có phải là UUID (không thì **400**). **Không kiểm tra learner có tồn tại khi thiếu/sai token** — trả **200** `learnerLinked:false` (không lộ việc learner có tồn tại hay không). Chỉ khi token hợp lệ mới tra DB: learner không có → **404**. ≤ 30 câu, ≤ 4 LC/câu, LC id lạ bị bỏ (trả `lcIdsDropped`), ≤ 16 LC khác nhau/lần chấm.
+- `POST /api/mastery {learnerId, learnerToken}` khi DB đã cấu hình nhưng down/treo → **503 + Retry-After** (không còn 200 store=memory rỗng). Memory fallback của LC mastery chỉ dùng khi **không cấu hình DB**.
 
 ### (c3) QA round 2 + thay đổi thiết kế (`PR #4`)
 - **Ngưỡng:** mastered = mean ≥ **0.7** và n ≥ 3 (3/3, 4/5 là mastered); gap = (mean < 0.5 và n ≥ 2) **hoặc** (n ≥ 1 và không câu nào đúng). UI ghi rõ: "Mastered: ≥70% with ≥3 answers · Gap: <50% with ≥2, or every answer wrong."
@@ -90,12 +91,12 @@ Tổng cộng: **22 tests trong 6 files** (mặc định local: **14 passed, 8 s
   1. Learner Multi-State lớp 4, làm 2 bài → /progress: không có `4.GM.*`; dòng heatmap là 4.MD/4.G/4.OA/4.NF.
   2. 1 câu sai duy nhất trên một LC → ô đó "Gap"; 4/5 đúng → "Mastered".
   3. Root gap: sai cả kỹ năng và tiên quyết trực tiếp → "Ôn nền tảng: <tiên quyết>"; tiên quyết chưa làm → "Kiểm tra nhanh…", không "Ôn"; không gợi ý chuẩn thấp hơn quá 2 lớp.
-  4. Gửi grade với `learnerId` của người khác (không token / token của learner khác) → 200, `learnerLinked:false`, không có dòng nào trong `amc_lc_mastery` cho learner đó.
+  4. `learnerId` không tồn tại **hoặc** của người khác: không token / token sai → **200**, `learnerLinked:false`, không ghi `amc_lc_mastery`. Cố ý không lộ việc learner có tồn tại khi chưa chứng minh sở hữu (token). 404 chỉ xảy ra khi token hợp lệ nhưng learner không có trong DB.
   5. Gửi 31 lần grade có token cùng learner trong 15 phút → lần 31 = 429 + `Retry-After`.
   6. `/api/mastery {learnerId}` không token → 401; có token (đăng nhập lại /progress) → 200.
   7. Mở /teacher bằng mã ngắn → thấy ghi chú tổng hợp; log Postgres không có lỗi uuid.
-  8. DB down/treo → grade, mastery {code}, teacher → 503 + `Retry-After`; JSON hỏng → 400.
-  9. Learner đã đăng nhập từ trước khi deploy (chưa có token) → bài làm không được lưu cho tới khi đăng nhập lại (có cảnh báo).
+  8. DB down/treo → grade, `/api/mastery {code}`, `/api/mastery {learnerId, token}`, teacher → **503 + Retry-After** (không 200 store=memory); JSON hỏng → 400.
+  9. Learner đã đăng nhập từ trước khi deploy (chưa có token) → bài làm không được lưu cho tới khi đăng nhập lại. Cảnh báo trên `/results` có chữ tiếng Việt «chưa lưu» (và bản tiếng Anh đi kèm).
 
 ### (d) Diagnostic Submit → `amc_sessions` & Teacher session code (`RUN_E2E=1`)
 - Grade 4 diagnostic trên `/` → trả lời 7 câu trên `/test` → Submit → `/results` hiện `Code XXXXXXXX` → `GET /api/teacher/session?sessionId=<code>` trả 200 → mở `/teacher` bằng code khớp snapshot.

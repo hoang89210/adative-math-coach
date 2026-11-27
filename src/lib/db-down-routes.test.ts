@@ -19,6 +19,7 @@ let grade: { POST: Handler };
 let mastery: { POST: Handler };
 let teacher: { GET: Handler };
 let learners: { POST: Handler };
+let issueLearnerToken: (id: string) => string;
 let endPool: () => Promise<void>;
 
 before(async () => {
@@ -27,6 +28,7 @@ before(async () => {
   mastery = await import("../app/api/mastery/route");
   teacher = await import("../app/api/teacher/session/route");
   learners = await import("../app/api/learners/route");
+  issueLearnerToken = (await import("./learner-token")).issueLearnerToken;
   const db = await import("./db/client");
   endPool = () => db.getPool().end();
 });
@@ -129,5 +131,38 @@ describe("routes with DB down (ECONNREFUSED)", () => {
     assert.equal(a.status, 400);
     assert.equal(b.status, 400);
     assert.ok(Date.now() - t0 < 500);
+  });
+
+  test("QA round 3: /api/mastery {learnerId, valid token} -> 503, not 200 store=memory", async () => {
+    const learnerId = "3f2b8a4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    const res = await mastery.POST(
+      post(
+        "/api/mastery",
+        JSON.stringify({ learnerId, learnerToken: issueLearnerToken(learnerId) }),
+      ),
+    );
+    assert.equal(res.status, 503);
+    assert.ok(Number(res.headers.get("Retry-After")) >= 1);
+    const body = (await res.json()) as { error?: string; store?: string };
+    assert.equal(body.store, undefined);
+    assert.match(String(body.error ?? ""), /temporarily unavailable|retry/i);
+  });
+
+  test("QA round 3: grade with a valid token while DB is down still 503", async () => {
+    const learnerId = "3f2b8a4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    const res = await grade.POST(
+      post(
+        "/api/diagnostic/grade",
+        JSON.stringify({
+          grade: "4",
+          learnerId,
+          learnerToken: issueLearnerToken(learnerId),
+          questions: [question],
+          answers: [{ questionId: "q0", answer: "5" }],
+        }),
+      ),
+    );
+    assert.equal(res.status, 503);
+    assert.ok(res.headers.get("Retry-After"));
   });
 });
